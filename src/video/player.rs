@@ -211,14 +211,8 @@ impl Drop for VideoPlayer {
 
 /// Convert a VideoFrame to a RenderImage
 fn frame_to_render_image(frame: &VideoFrame) -> Option<RenderImage> {
-    // Create an RgbaImage from raw data
-    // Note: Our data is RGBA, but RenderImage expects BGRA, so we need to swap channels
-    let mut bgra_data = frame.data.clone();
-    for chunk in bgra_data.chunks_exact_mut(4) {
-        chunk.swap(0, 2); // Swap R and B
-    }
-
-    let image = RgbaImage::from_raw(frame.width, frame.height, bgra_data)?;
+    // Data is already in BGRA format from the decoder (matches GPUI's expected format)
+    let image = RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())?;
 
     // Create a Frame from the image
     let img_frame = Frame::new(image);

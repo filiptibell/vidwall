@@ -126,7 +126,7 @@ pub fn decode_video<P: AsRef<Path>>(
 
     let mut scaler: Option<ScalerContext> = None;
     let mut decoded_frame = VideoFrameFFmpeg::empty();
-    let mut rgba_frame = VideoFrameFFmpeg::empty();
+    let mut bgra_frame = VideoFrameFFmpeg::empty();
 
     // Process all packets
     for (stream, packet) in input_ctx.packets() {
@@ -159,32 +159,32 @@ pub fn decode_video<P: AsRef<Path>>(
                     src_format,
                     src_width,
                     src_height,
-                    ffmpeg_next::format::Pixel::RGBA,
+                    ffmpeg_next::format::Pixel::BGRA,
                     dst_width,
                     dst_height,
                     ScalerFlags::BILINEAR,
                 )?);
             }
 
-            // Scale/convert to RGBA
+            // Scale/convert to BGRA (native format for GPUI)
             let scaler = scaler.as_mut().unwrap();
-            scaler.run(&decoded_frame, &mut rgba_frame)?;
+            scaler.run(&decoded_frame, &mut bgra_frame)?;
 
-            let dst_width = rgba_frame.width();
-            let dst_height = rgba_frame.height();
-            let data = rgba_frame.data(0);
-            let stride = rgba_frame.stride(0);
+            let dst_width = bgra_frame.width();
+            let dst_height = bgra_frame.height();
+            let data = bgra_frame.data(0);
+            let stride = bgra_frame.stride(0);
             let pts = pts_to_duration(decoded_frame.pts().unwrap_or(0), time_base);
 
-            // Copy data accounting for stride
-            let mut rgba_data = Vec::with_capacity((dst_width * dst_height * 4) as usize);
+            // Copy data accounting for stride (already in BGRA format for GPUI)
+            let mut bgra_data = Vec::with_capacity((dst_width * dst_height * 4) as usize);
             for y in 0..dst_height as usize {
                 let row_start = y * stride;
                 let row_end = row_start + (dst_width as usize * 4);
-                rgba_data.extend_from_slice(&data[row_start..row_end]);
+                bgra_data.extend_from_slice(&data[row_start..row_end]);
             }
 
-            let frame = VideoFrame::new(rgba_data, dst_width, dst_height, pts);
+            let frame = VideoFrame::new(bgra_data, dst_width, dst_height, pts);
 
             // Push to queue (blocks if full)
             if !queue.push(frame) {
@@ -202,22 +202,22 @@ pub fn decode_video<P: AsRef<Path>>(
         }
 
         if let Some(ref mut scaler) = scaler {
-            scaler.run(&decoded_frame, &mut rgba_frame)?;
+            scaler.run(&decoded_frame, &mut bgra_frame)?;
 
-            let dst_width = rgba_frame.width();
-            let dst_height = rgba_frame.height();
-            let data = rgba_frame.data(0);
-            let stride = rgba_frame.stride(0);
+            let dst_width = bgra_frame.width();
+            let dst_height = bgra_frame.height();
+            let data = bgra_frame.data(0);
+            let stride = bgra_frame.stride(0);
             let pts = pts_to_duration(decoded_frame.pts().unwrap_or(0), time_base);
 
-            let mut rgba_data = Vec::with_capacity((dst_width * dst_height * 4) as usize);
+            let mut bgra_data = Vec::with_capacity((dst_width * dst_height * 4) as usize);
             for y in 0..dst_height as usize {
                 let row_start = y * stride;
                 let row_end = row_start + (dst_width as usize * 4);
-                rgba_data.extend_from_slice(&data[row_start..row_end]);
+                bgra_data.extend_from_slice(&data[row_start..row_end]);
             }
 
-            let frame = VideoFrame::new(rgba_data, dst_width, dst_height, pts);
+            let frame = VideoFrame::new(bgra_data, dst_width, dst_height, pts);
             if !queue.push(frame) {
                 return Ok(());
             }
