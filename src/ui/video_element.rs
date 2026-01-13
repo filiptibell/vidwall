@@ -2,13 +2,15 @@ use std::panic::Location;
 use std::sync::Arc;
 
 use gpui::{
-    fill, prelude::*, Bounds, Corners, ElementId, GlobalElementId, InspectorElementId, LayoutId,
-    Pixels, RenderImage, Window,
+    Bounds, Corners, ElementId, GlobalElementId, InspectorElementId, LayoutId, Pixels, RenderImage,
+    Window, fill, prelude::*,
 };
 
 use crate::video::VideoPlayer;
 
-/// A video element that renders frames from a VideoPlayer
+/**
+    A video element that renders frames from a VideoPlayer
+*/
 pub struct VideoElement {
     player: Arc<VideoPlayer>,
     id: ElementId,
@@ -33,7 +35,9 @@ impl IntoElement for VideoElement {
 
 impl Element for VideoElement {
     type RequestLayoutState = ();
-    /// (current_image, old_image_to_drop)
+    /**
+        (current_image, old_image_to_drop)
+    */
     type PrepaintState = (Option<Arc<RenderImage>>, Option<Arc<RenderImage>>);
 
     fn id(&self) -> Option<ElementId> {
@@ -98,7 +102,7 @@ impl Element for VideoElement {
                 bounds,
                 Corners::default(),
                 render_image,
-                0, // frame index
+                0,     // frame index
                 false, // grayscale
             );
         } else {
@@ -111,7 +115,9 @@ impl Element for VideoElement {
     }
 }
 
-/// Helper function to create a video element
+/**
+    Helper function to create a video element
+*/
 pub fn video_element(player: Arc<VideoPlayer>, id: impl Into<ElementId>) -> VideoElement {
     VideoElement::new(player, id)
 }

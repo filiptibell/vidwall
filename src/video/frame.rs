@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-/// A decoded video frame ready for rendering
+/**
+    A decoded video frame ready for rendering
+*/
 #[derive(Clone)]
 pub struct VideoFrame {
     /// BGRA pixel data (width * height * 4 bytes)

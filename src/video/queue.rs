@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use super::frame::VideoFrame;
 
-/// Thread-safe bounded frame queue for producer-consumer pattern
+/**
+    Thread-safe bounded frame queue for producer-consumer pattern
+*/
 pub struct FrameQueue {
     inner: Mutex<QueueInner>,
     not_full: Condvar,
@@ -30,8 +32,10 @@ impl FrameQueue {
         }
     }
 
-    /// Push a frame to the queue, blocking if full.
-    /// Returns false if the queue was closed.
+    /**
+        Push a frame to the queue, blocking if full.
+        Returns false if the queue was closed.
+    */
     pub fn push(&self, frame: VideoFrame) -> bool {
         let mut inner = self.inner.lock().unwrap();
 
@@ -49,7 +53,9 @@ impl FrameQueue {
         true
     }
 
-    /// Try to push without blocking. Returns true if successful.
+    /**
+        Try to push without blocking. Returns true if successful.
+    */
     pub fn try_push(&self, frame: VideoFrame) -> bool {
         let mut inner = self.inner.lock().unwrap();
 
@@ -62,8 +68,10 @@ impl FrameQueue {
         true
     }
 
-    /// Pop a frame from the queue, blocking if empty.
-    /// Returns None if the queue is closed and empty.
+    /**
+        Pop a frame from the queue, blocking if empty.
+        Returns None if the queue is closed and empty.
+    */
     pub fn pop(&self) -> Option<VideoFrame> {
         let mut inner = self.inner.lock().unwrap();
 
@@ -79,7 +87,9 @@ impl FrameQueue {
         frame
     }
 
-    /// Try to pop without blocking.
+    /**
+        Try to pop without blocking.
+    */
     pub fn try_pop(&self) -> Option<VideoFrame> {
         let mut inner = self.inner.lock().unwrap();
         let frame = inner.frames.pop_front();
@@ -89,7 +99,9 @@ impl FrameQueue {
         frame
     }
 
-    /// Pop a frame with timeout. Returns None if timeout or closed.
+    /**
+        Pop a frame with timeout. Returns None if timeout or closed.
+    */
     pub fn pop_timeout(&self, timeout: Duration) -> Option<VideoFrame> {
         let mut inner = self.inner.lock().unwrap();
 
@@ -105,23 +117,31 @@ impl FrameQueue {
         frame
     }
 
-    /// Peek at the front frame without removing it.
+    /**
+        Peek at the front frame without removing it.
+    */
     pub fn peek(&self) -> Option<VideoFrame> {
         let inner = self.inner.lock().unwrap();
         inner.frames.front().cloned()
     }
 
-    /// Get the number of frames currently in the queue.
+    /**
+        Get the number of frames currently in the queue.
+    */
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap().frames.len()
     }
 
-    /// Check if the queue is empty.
+    /**
+        Check if the queue is empty.
+    */
     pub fn is_empty(&self) -> bool {
         self.inner.lock().unwrap().frames.is_empty()
     }
 
-    /// Close the queue, waking all waiters.
+    /**
+        Close the queue, waking all waiters.
+    */
     pub fn close(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.closed = true;
@@ -129,12 +149,16 @@ impl FrameQueue {
         self.not_empty.notify_all();
     }
 
-    /// Check if the queue is closed.
+    /**
+        Check if the queue is closed.
+    */
     pub fn is_closed(&self) -> bool {
         self.inner.lock().unwrap().closed
     }
 
-    /// Clear all frames from the queue.
+    /**
+        Clear all frames from the queue.
+    */
     pub fn clear(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.frames.clear();

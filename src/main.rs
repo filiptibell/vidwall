@@ -1,24 +1,26 @@
-//! 2x2 Randomized Video Grid Player
-//!
-//! Opens a folder, finds all videos, and plays 4 random videos in a grid.
-//! When a video ends, it's replaced with a new random video from the folder.
-//!
-//! Prerequisites:
-//! - FFmpeg: `brew install ffmpeg`
-//!
-//! Usage:
-//!   cargo run --release
-//!   cargo run --release -- /path/to/videos
+/*!
+    2x2 Randomized Video Grid Player
 
-mod ui;
-mod video;
+    Opens a folder, finds all videos, and plays 4 random videos in a grid.
+    When a video ends, it's replaced with a new random video from the folder.
+
+    Prerequisites:
+    - FFmpeg: `brew install ffmpeg`
+
+    Usage:
+      cargo run --release
+      cargo run --release -- /path/to/videos
+*/
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{px, size, App, AppContext, Application, AsyncApp, Bounds, WindowBounds, WindowOptions};
+use gpui::{App, AppContext, Application, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use rand::seq::SliceRandom;
 use walkdir::WalkDir;
+
+mod ui;
+mod video;
 
 use ui::VideoGridView;
 use video::VideoPlayer;
@@ -32,7 +34,9 @@ const VIDEO_EXTENSIONS: &[&str] = &[
 const DEFAULT_WIDTH: u32 = 1280;
 const DEFAULT_HEIGHT: u32 = 720;
 
-/// Recursively scan a directory for video files
+/**
+    Recursively scan a directory for video files
+*/
 fn scan_for_videos(folder: &PathBuf) -> Vec<PathBuf> {
     WalkDir::new(folder)
         .follow_links(true)
@@ -50,7 +54,9 @@ fn scan_for_videos(folder: &PathBuf) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Pick n random videos from the list (with repetition if fewer than n videos)
+/**
+    Pick n random videos from the list (with repetition if fewer than n videos)
+*/
 fn pick_random_videos(videos: &[PathBuf], n: usize) -> Vec<PathBuf> {
     let mut rng = rand::thread_rng();
 
@@ -122,10 +128,7 @@ fn open_grid_with_folder(folder: PathBuf, cx: &mut App) {
     // Create VideoPlayer instances (decode at native resolution for quality)
     let players: Result<Vec<Arc<VideoPlayer>>, _> = selected
         .iter()
-        .map(|path| {
-            VideoPlayer::with_options(path, None, None)
-                .map(Arc::new)
-        })
+        .map(|path| VideoPlayer::with_options(path, None, None).map(Arc::new))
         .collect();
 
     let players = match players {
@@ -165,11 +168,7 @@ fn open_grid_with_folder(folder: PathBuf, cx: &mut App) {
             }),
             ..Default::default()
         },
-        |_, cx| {
-            cx.new(|cx| {
-                VideoGridView::new(players_array, all_videos, cx)
-            })
-        },
+        |_, cx| cx.new(|cx| VideoGridView::new(players_array, all_videos, cx)),
     )
     .expect("Failed to open window");
 

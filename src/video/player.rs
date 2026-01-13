@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -13,7 +15,9 @@ use super::queue::FrameQueue;
 
 const DEFAULT_QUEUE_CAPACITY: usize = 60;
 
-/// Playback state
+/**
+    Playback state
+*/
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackState {
     Playing,
@@ -21,7 +25,9 @@ pub enum PlaybackState {
     Error,
 }
 
-/// High-level video player that manages decoding and playback timing
+/**
+    High-level video player that manages decoding and playback timing
+*/
 pub struct VideoPlayer {
     path: PathBuf,
     queue: Arc<FrameQueue>,
@@ -39,12 +45,16 @@ pub struct VideoPlayer {
 }
 
 impl VideoPlayer {
-    /// Create a new video player for the given file
+    /**
+        Create a new video player for the given file
+    */
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, DecoderError> {
         Self::with_options(path, None, None)
     }
 
-    /// Create a new video player with target dimensions
+    /**
+        Create a new video player with target dimensions
+    */
     pub fn with_options<P: AsRef<Path>>(
         path: P,
         target_width: Option<u32>,
@@ -87,35 +97,47 @@ impl VideoPlayer {
         })
     }
 
-    /// Get the video file path
+    /**
+        Get the video file path
+    */
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Get the video duration
+    /**
+        Get the video duration
+    */
     pub fn duration(&self) -> Duration {
         self.duration
     }
 
-    /// Get the current playback position
+    /**
+        Get the current playback position
+    */
     pub fn position(&self) -> Duration {
         let current = self.current_frame.lock().unwrap();
         current.as_ref().map(|f| f.pts).unwrap_or(Duration::ZERO)
     }
 
-    /// Get the current playback state
+    /**
+        Get the current playback state
+    */
     pub fn state(&self) -> PlaybackState {
         *self.state.lock().unwrap()
     }
 
-    /// Check if playback has ended
+    /**
+        Check if playback has ended
+    */
     pub fn is_ended(&self) -> bool {
         self.state() == PlaybackState::Ended
     }
 
-    /// Get the cached RenderImage for the current frame.
-    /// Only creates a new RenderImage when the frame actually changes.
-    /// Returns (current_image, old_image_to_drop) - caller should drop the old image via window.drop_image()
+    /**
+        Get the cached RenderImage for the current frame.
+        Only creates a new RenderImage when the frame actually changes.
+        Returns (current_image, old_image_to_drop) - caller should drop the old image via window.drop_image()
+    */
     pub fn get_render_image(&self) -> (Option<Arc<RenderImage>>, Option<Arc<RenderImage>>) {
         let elapsed = self.start_time.elapsed();
 
@@ -183,18 +205,24 @@ impl VideoPlayer {
         (cached.clone(), old_image)
     }
 
-    /// Get the current frame for rendering based on elapsed time.
-    /// Returns a reference to the current frame if available.
+    /**
+        Get the current frame for rendering based on elapsed time.
+        Returns a reference to the current frame if available.
+    */
     pub fn get_frame(&self) -> Option<VideoFrame> {
         self.current_frame.lock().unwrap().clone()
     }
 
-    /// Get the number of buffered frames
+    /**
+        Get the number of buffered frames
+    */
     pub fn buffered_frames(&self) -> usize {
         self.queue.len()
     }
 
-    /// Stop playback and clean up resources
+    /**
+        Stop playback and clean up resources
+    */
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
         self.queue.close();
@@ -211,7 +239,9 @@ impl Drop for VideoPlayer {
     }
 }
 
-/// Convert a VideoFrame to a RenderImage
+/**
+    Convert a VideoFrame to a RenderImage
+*/
 fn frame_to_render_image(frame: &VideoFrame) -> Option<RenderImage> {
     // Data is already in BGRA format from the decoder (matches GPUI's expected format)
     let image = RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())?;

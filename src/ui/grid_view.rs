@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{div, prelude::*, rgb, AsyncApp, Context, WeakEntity, Window};
+use gpui::{AsyncApp, Context, WeakEntity, Window, div, prelude::*, rgb};
 use rand::seq::SliceRandom;
 
 use crate::video::VideoPlayer;
@@ -11,7 +11,9 @@ use super::video_element::video_element;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// The main view holding our 4 video players in a 2x2 grid
+/**
+    The main view holding our 4 video players in a 2x2 grid
+*/
 pub struct VideoGridView {
     players: [Arc<VideoPlayer>; 4],
     all_video_paths: Vec<PathBuf>,
@@ -50,7 +52,9 @@ impl VideoGridView {
         }
     }
 
-    /// Check each video slot and replace any that have finished
+    /**
+        Check each video slot and replace any that have finished
+    */
     fn check_and_replace_ended_videos(&mut self, _cx: &mut Context<Self>) {
         for i in 0..4 {
             if self.players[i].is_ended() {
@@ -67,7 +71,9 @@ impl VideoGridView {
         }
     }
 
-    /// Create a new random video player from the available paths
+    /**
+        Create a new random video player from the available paths
+    */
     fn create_replacement_player(&self) -> Option<VideoPlayer> {
         let mut rng = rand::thread_rng();
         let path = self.all_video_paths.choose(&mut rng)?;

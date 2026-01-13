@@ -1,22 +1,25 @@
 use std::path::Path;
 use std::ptr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
-use ffmpeg_next::ffi;
-use ffmpeg_next::format::input;
-use ffmpeg_next::media::Type;
-use ffmpeg_next::software::scaling::{
-    context::Context as ScalerContext, flag::Flags as ScalerFlags,
+use ffmpeg_next::{
+    Rational, codec, ffi,
+    format::input,
+    media::Type,
+    software::scaling::{context::Context as ScalerContext, flag::Flags as ScalerFlags},
+    util::frame::video::Video as VideoFrameFFmpeg,
 };
-use ffmpeg_next::util::frame::video::Video as VideoFrameFFmpeg;
-use ffmpeg_next::{Rational, codec};
 
 use super::frame::VideoFrame;
 use super::queue::FrameQueue;
 
-/// Error type for video decoding operations
+/**
+    Error type for video decoding operations
+*/
 #[derive(Debug)]
 pub enum DecoderError {
     NoVideoStream,
@@ -48,14 +51,18 @@ impl From<std::io::Error> for DecoderError {
     }
 }
 
-/// Information about a video file
+/**
+    Information about a video file
+*/
 pub struct VideoInfo {
     pub duration: Duration,
     pub width: u32,
     pub height: u32,
 }
 
-/// Get video info without fully opening for decoding
+/**
+    Get video info without fully opening for decoding
+*/
 pub fn get_video_info<P: AsRef<Path>>(path: P) -> Result<VideoInfo, DecoderError> {
     ffmpeg_next::init()?;
 
@@ -93,7 +100,9 @@ pub fn get_video_info<P: AsRef<Path>>(path: P) -> Result<VideoInfo, DecoderError
     })
 }
 
-/// Convert a PTS timestamp to Duration
+/**
+    Convert a PTS timestamp to Duration
+*/
 fn pts_to_duration(pts: i64, time_base: Rational) -> Duration {
     if pts < 0 {
         return Duration::ZERO;
@@ -102,7 +111,9 @@ fn pts_to_duration(pts: i64, time_base: Rational) -> Duration {
     Duration::from_secs_f64(seconds.max(0.0))
 }
 
-/// Create a VideoToolbox hardware device context (macOS only)
+/**
+    Create a VideoToolbox hardware device context (macOS only)
+*/
 #[cfg(target_os = "macos")]
 fn create_hw_device_ctx() -> Option<*mut ffi::AVBufferRef> {
     unsafe {
@@ -127,14 +138,18 @@ fn create_hw_device_ctx() -> Option<*mut ffi::AVBufferRef> {
     None
 }
 
-/// Check if a frame is in hardware format and needs transfer
+/**
+    Check if a frame is in hardware format and needs transfer
+*/
 fn is_hw_frame(frame: &VideoFrameFFmpeg) -> bool {
     let format = unsafe { (*frame.as_ptr()).format };
     // VideoToolbox uses AV_PIX_FMT_VIDEOTOOLBOX
     format == ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX as i32
 }
 
-/// Transfer hardware frame to software frame
+/**
+    Transfer hardware frame to software frame
+*/
 fn transfer_hw_frame(hw_frame: &VideoFrameFFmpeg) -> Result<VideoFrameFFmpeg, DecoderError> {
     unsafe {
         let mut sw_frame = VideoFrameFFmpeg::empty();
@@ -148,7 +163,9 @@ fn transfer_hw_frame(hw_frame: &VideoFrameFFmpeg) -> Result<VideoFrameFFmpeg, De
     }
 }
 
-/// Decode a video file, pushing frames to the queue until stopped or EOF
+/**
+    Decode a video file, pushing frames to the queue until stopped or EOF
+*/
 pub fn decode_video<P: AsRef<Path>>(
     path: P,
     queue: Arc<FrameQueue>,
