@@ -3,7 +3,7 @@ use std::time::Duration;
 /// A decoded video frame ready for rendering
 #[derive(Clone)]
 pub struct VideoFrame {
-    /// RGBA pixel data (width * height * 4 bytes)
+    /// BGRA pixel data (width * height * 4 bytes)
     pub data: Vec<u8>,
     /// Frame width in pixels
     pub width: u32,
