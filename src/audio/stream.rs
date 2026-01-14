@@ -1,6 +1,7 @@
 use std::cell::UnsafeCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::thread;
 use std::time::Duration;
 
 use ringbuf::{
@@ -108,12 +109,26 @@ unsafe impl Send for AudioStreamProducer {}
 unsafe impl Sync for AudioStreamProducer {}
 
 impl AudioStreamProducer {
-    /// Push samples to the ring buffer. Returns number of samples written.
-    /// This is lock-free and will not block.
-    pub fn push(&self, samples: &[f32]) -> usize {
-        // SAFETY: Only one thread (decoder) calls push, and ringbuf's
-        // producer is designed to work independently from consumer.
-        unsafe { (*self.producer.get()).push_slice(samples) }
+    /// Push samples to the ring buffer, blocking if the buffer is full.
+    /// Returns false if the producer was closed while waiting.
+    pub fn push(&self, samples: &[f32]) -> bool {
+        let mut offset = 0;
+        while offset < samples.len() {
+            if self.closed.load(Ordering::Acquire) {
+                return false;
+            }
+
+            // SAFETY: Only one thread (decoder) calls push, and ringbuf's
+            // producer is designed to work independently from consumer.
+            let written = unsafe { (*self.producer.get()).push_slice(&samples[offset..]) };
+            offset += written;
+
+            if offset < samples.len() {
+                // Buffer full, wait a bit for consumer to drain
+                thread::sleep(Duration::from_micros(500));
+            }
+        }
+        true
     }
 
     /// Check if there's space for more samples
@@ -185,11 +200,7 @@ impl AudioStreamConsumer {
 
     /// Fill the output buffer with samples, applying volume.
     /// This is completely lock-free and safe for real-time audio.
-    ///
-    /// The clock always advances by the full buffer size (representing real time),
-    /// regardless of whether we had enough samples. This prevents deadlock when
-    /// the audio buffer temporarily runs dry - video will keep advancing and
-    /// consuming frames, allowing the decoder to produce more audio.
+    /// Updates the shared clock with the number of samples actually consumed.
     ///
     /// Returns: Number of actual audio samples written (not silence)
     pub fn fill_buffer(&self, output: &mut [f32]) -> usize {
@@ -200,9 +211,12 @@ impl AudioStreamConsumer {
         let available = unsafe { (*self.consumer.get()).occupied_len() };
         let to_read = output.len().min(available);
 
-        let samples_read = if to_read > 0 {
+        if to_read > 0 {
             // Read samples from ring buffer
             let read = unsafe { (*self.consumer.get()).pop_slice(&mut output[..to_read]) };
+
+            // Update the shared clock with samples consumed
+            self.clock.add_samples(read as u64);
 
             // Apply volume to the samples we read
             for sample in &mut output[..read] {
@@ -221,15 +235,7 @@ impl AudioStreamConsumer {
                 *sample = 0.0;
             }
             0
-        };
-
-        // Always advance clock by full buffer size - this represents real time passing.
-        // Even if we output silence, time moves forward. This prevents deadlock:
-        // if we only advance when we have samples, an empty buffer would stall
-        // the video, which would stall the decoder, which couldn't produce more audio.
-        self.clock.add_samples(output.len() as u64);
-
-        samples_read
+        }
     }
 }
 

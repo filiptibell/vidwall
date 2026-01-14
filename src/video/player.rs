@@ -9,14 +9,20 @@ use std::time::{Duration, Instant};
 use gpui::RenderImage;
 use image::{Frame, RgbaImage};
 
-use super::decoder::{DecoderError, decode_video, get_video_info};
+use super::decoder::{
+    DecoderError, decode_audio_packets, decode_video_packets, demux, get_stream_info,
+    get_video_info,
+};
 use super::frame::VideoFrame;
+use super::packet_queue::PacketQueue;
 use super::queue::FrameQueue;
 use crate::audio::{
     AudioStreamClock, AudioStreamConsumer, AudioStreamProducer, create_audio_stream,
 };
 
 const DEFAULT_VIDEO_QUEUE_CAPACITY: usize = 60;
+const VIDEO_PACKET_QUEUE_CAPACITY: usize = 120;
+const AUDIO_PACKET_QUEUE_CAPACITY: usize = 240;
 
 /**
     Playback state
@@ -31,28 +37,40 @@ pub enum PlaybackState {
 /**
     High-level video player that manages decoding and playback timing.
 
-    For videos with audio, timing is driven by the audio clock (samples consumed).
-    For videos without audio, timing falls back to wall clock.
+    Uses three threads for decoding:
+    - Demux thread: reads packets from file, routes to packet queues
+    - Video decode thread: decodes video packets to frames
+    - Audio decode thread: decodes audio packets to samples
+
+    This architecture prevents video blocking from starving audio decoding.
 */
 pub struct VideoPlayer {
     path: PathBuf,
+    // Output queues
     video_queue: Arc<FrameQueue>,
+    // Audio components
     audio_producer: Option<Arc<AudioStreamProducer>>,
     audio_consumer: Option<Arc<AudioStreamConsumer>>,
-    /// Shared audio clock for A/V sync (None for videos without audio)
     audio_clock: Option<Arc<AudioStreamClock>>,
+    // Packet queues for inter-thread communication
+    video_packet_queue: Arc<PacketQueue>,
+    audio_packet_queue: Option<Arc<PacketQueue>>,
+    // Thread handles
     stop_flag: Arc<AtomicBool>,
-    decoder_handle: Option<JoinHandle<Result<(), DecoderError>>>,
-    /// Wall clock start time (used as fallback for videos without audio)
+    demux_handle: Option<JoinHandle<Result<(), DecoderError>>>,
+    video_decode_handle: Option<JoinHandle<Result<(), DecoderError>>>,
+    audio_decode_handle: Option<JoinHandle<Result<(), DecoderError>>>,
+    // Timing
     start_time: Instant,
+    // Frame state
     current_frame: Mutex<Option<VideoFrame>>,
-    next_frame: Mutex<Option<VideoFrame>>, // Buffered frame waiting for its PTS
-    base_pts: Mutex<Option<Duration>>,     // PTS of the first frame (used as offset)
+    next_frame: Mutex<Option<VideoFrame>>,
+    base_pts: Mutex<Option<Duration>>,
     duration: Duration,
     state: Mutex<PlaybackState>,
-    // Cached render image - only recreated when frame changes
+    // Render cache
     cached_render_image: Mutex<Option<Arc<RenderImage>>>,
-    frame_generation: AtomicU64, // Incremented each time frame changes
+    frame_generation: AtomicU64,
 }
 
 impl VideoPlayer {
@@ -73,10 +91,20 @@ impl VideoPlayer {
     ) -> Result<Self, DecoderError> {
         let path = path.as_ref().to_path_buf();
         let info = get_video_info(&path)?;
+        let stream_info = get_stream_info(&path)?;
         let start_time = Instant::now();
 
+        // Create output queues
         let video_queue = Arc::new(FrameQueue::new(DEFAULT_VIDEO_QUEUE_CAPACITY));
         let stop_flag = Arc::new(AtomicBool::new(false));
+
+        // Create packet queues
+        let video_packet_queue = Arc::new(PacketQueue::new(VIDEO_PACKET_QUEUE_CAPACITY));
+        let audio_packet_queue = if info.has_audio {
+            Some(Arc::new(PacketQueue::new(AUDIO_PACKET_QUEUE_CAPACITY)))
+        } else {
+            None
+        };
 
         // Create audio stream if video has audio
         let (audio_producer, audio_consumer, audio_clock) = if info.has_audio {
@@ -90,22 +118,49 @@ impl VideoPlayer {
             (None, None, None)
         };
 
-        // Spawn decoder thread
-        let decoder_path = path.clone();
-        let decoder_video_queue = Arc::clone(&video_queue);
-        let decoder_audio_producer = audio_producer.clone();
-        let decoder_stop = Arc::clone(&stop_flag);
+        // Spawn demux thread
+        let demux_handle = {
+            let path = path.clone();
+            let video_pq = Arc::clone(&video_packet_queue);
+            let audio_pq = audio_packet_queue.clone();
+            let stop = Arc::clone(&stop_flag);
+            thread::spawn(move || demux(path, video_pq, audio_pq, stop))
+        };
 
-        let decoder_handle = thread::spawn(move || {
-            decode_video(
-                decoder_path,
-                decoder_video_queue,
-                decoder_audio_producer,
-                decoder_stop,
-                target_width,
-                target_height,
-            )
-        });
+        // Spawn video decode thread
+        let video_decode_handle = {
+            let packets = Arc::clone(&video_packet_queue);
+            let frames = Arc::clone(&video_queue);
+            let params = stream_info.video_codec_params.clone();
+            let tb = stream_info.video_time_base;
+            let stop = Arc::clone(&stop_flag);
+            thread::spawn(move || {
+                decode_video_packets(
+                    packets,
+                    frames,
+                    params,
+                    tb,
+                    stop,
+                    target_width,
+                    target_height,
+                )
+            })
+        };
+
+        // Spawn audio decode thread (if has audio)
+        let audio_decode_handle = if let (Some(packets), Some(producer), Some(params), Some(tb)) = (
+            audio_packet_queue.clone(),
+            audio_producer.clone(),
+            stream_info.audio_codec_params.clone(),
+            stream_info.audio_time_base,
+        ) {
+            let stop = Arc::clone(&stop_flag);
+            Some(thread::spawn(move || {
+                decode_audio_packets(packets, producer, params, tb, stop)
+            }))
+        } else {
+            None
+        };
 
         Ok(Self {
             path,
@@ -113,8 +168,12 @@ impl VideoPlayer {
             audio_producer,
             audio_consumer,
             audio_clock,
+            video_packet_queue,
+            audio_packet_queue,
             stop_flag,
-            decoder_handle: Some(decoder_handle),
+            demux_handle: Some(demux_handle),
+            video_decode_handle: Some(video_decode_handle),
+            audio_decode_handle,
             start_time,
             current_frame: Mutex::new(None),
             next_frame: Mutex::new(None),
@@ -155,10 +214,8 @@ impl VideoPlayer {
     */
     fn get_playback_time(&self) -> Duration {
         if let Some(ref clock) = self.audio_clock {
-            // Audio-driven: use the audio playback position
             clock.position()
         } else {
-            // No audio: fall back to wall clock
             self.start_time.elapsed()
         }
     }
@@ -186,7 +243,6 @@ impl VideoPlayer {
 
     /**
         Get the audio clock if this video has audio.
-        This can be shared with other components for A/V sync.
     */
     pub fn audio_clock(&self) -> Option<&Arc<AudioStreamClock>> {
         self.audio_clock.as_ref()
@@ -225,10 +281,9 @@ impl VideoPlayer {
         For videos with audio, frame timing is driven by the audio clock.
         For videos without audio, frame timing uses wall clock.
 
-        Returns (current_image, old_image_to_drop) - caller should drop the old image via window.drop_image()
+        Returns (current_image, old_image_to_drop)
     */
     pub fn get_render_image(&self) -> (Option<Arc<RenderImage>>, Option<Arc<RenderImage>>) {
-        // Get playback time from audio clock or wall clock
         let elapsed = self.get_playback_time();
 
         let mut current = self.current_frame.lock().unwrap();
@@ -253,19 +308,14 @@ impl VideoPlayer {
         }
 
         // Advance to the next frame if its PTS has passed
-        // Only advance one frame per render to ensure smooth playback
-        // (aggressive catch-up causes visible frame skipping on VFR videos)
         if let Some(ref frame) = *next {
             let base = base_pts.unwrap_or(Duration::ZERO);
             let relative_pts = frame.pts.saturating_sub(base);
 
             if elapsed >= relative_pts {
-                // Time to show this frame
                 *current = next.take();
                 frame_changed = true;
                 self.frame_generation.fetch_add(1, Ordering::Relaxed);
-
-                // Pre-fetch the next frame
                 *next = self.video_queue.try_pop();
             }
         }
@@ -285,7 +335,6 @@ impl VideoPlayer {
         if frame_changed || cached.is_none() {
             if let Some(ref frame) = *current {
                 if let Some(render_image) = frame_to_render_image(frame) {
-                    // Save old image to be dropped
                     old_image = cached.take();
                     *cached = Some(Arc::new(render_image));
                 }
@@ -297,7 +346,6 @@ impl VideoPlayer {
 
     /**
         Get the current frame for rendering based on elapsed time.
-        Returns a reference to the current frame if available.
     */
     pub fn get_frame(&self) -> Option<VideoFrame> {
         self.current_frame.lock().unwrap().clone()
@@ -325,12 +373,25 @@ impl VideoPlayer {
     */
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
+
+        // Close all queues to unblock threads
+        self.video_packet_queue.close();
+        if let Some(ref q) = self.audio_packet_queue {
+            q.close();
+        }
         self.video_queue.close();
         if let Some(ref producer) = self.audio_producer {
             producer.close();
         }
 
-        if let Some(handle) = self.decoder_handle.take() {
+        // Join all threads
+        if let Some(handle) = self.demux_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.video_decode_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.audio_decode_handle.take() {
             let _ = handle.join();
         }
     }
@@ -346,12 +407,7 @@ impl Drop for VideoPlayer {
     Convert a VideoFrame to a RenderImage
 */
 fn frame_to_render_image(frame: &VideoFrame) -> Option<RenderImage> {
-    // Data is already in BGRA format from the decoder (matches GPUI's expected format)
     let image = RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())?;
-
-    // Create a Frame from the image
     let img_frame = Frame::new(image);
-
-    // Create RenderImage
     Some(RenderImage::new(vec![img_frame]))
 }

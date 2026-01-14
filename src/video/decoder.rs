@@ -10,6 +10,7 @@ use ffmpeg_next::{
     ChannelLayout, Rational, codec, ffi,
     format::input,
     media::Type,
+    packet::Mut as PacketMut,
     software::resampling::context::Context as ResamplerContext,
     software::scaling::{context::Context as ScalerContext, flag::Flags as ScalerFlags},
     util::frame::audio::Audio as AudioFrameFFmpeg,
@@ -17,6 +18,7 @@ use ffmpeg_next::{
 };
 
 use super::frame::VideoFrame;
+use super::packet_queue::{Packet, PacketQueue};
 use super::queue::FrameQueue;
 use crate::audio::{AudioStreamProducer, DEFAULT_SAMPLE_RATE};
 
@@ -65,6 +67,16 @@ pub struct VideoInfo {
 }
 
 /**
+    Information about streams needed by decode threads
+*/
+pub struct StreamInfo {
+    pub video_time_base: Rational,
+    pub video_codec_params: codec::Parameters,
+    pub audio_time_base: Option<Rational>,
+    pub audio_codec_params: Option<codec::Parameters>,
+}
+
+/**
     Get video info without fully opening for decoding
 */
 pub fn get_video_info<P: AsRef<Path>>(path: P) -> Result<VideoInfo, DecoderError> {
@@ -108,6 +120,40 @@ pub fn get_video_info<P: AsRef<Path>>(path: P) -> Result<VideoInfo, DecoderError
 }
 
 /**
+    Get stream info needed by decode threads
+*/
+pub fn get_stream_info<P: AsRef<Path>>(path: P) -> Result<StreamInfo, DecoderError> {
+    ffmpeg_next::init()?;
+
+    let input_ctx = input(&path)?;
+
+    let video_stream = input_ctx
+        .streams()
+        .best(Type::Video)
+        .ok_or(DecoderError::NoVideoStream)?;
+
+    let video_time_base = video_stream.time_base();
+    let video_codec_params = video_stream.parameters();
+
+    let (audio_time_base, audio_codec_params) =
+        if let Some(audio_stream) = input_ctx.streams().best(Type::Audio) {
+            (
+                Some(audio_stream.time_base()),
+                Some(audio_stream.parameters()),
+            )
+        } else {
+            (None, None)
+        };
+
+    Ok(StreamInfo {
+        video_time_base,
+        video_codec_params,
+        audio_time_base,
+        audio_codec_params,
+    })
+}
+
+/**
     Convert a PTS timestamp to Duration
 */
 fn pts_to_duration(pts: i64, time_base: Rational) -> Duration {
@@ -116,6 +162,94 @@ fn pts_to_duration(pts: i64, time_base: Rational) -> Duration {
     }
     let seconds = pts as f64 * time_base.numerator() as f64 / time_base.denominator() as f64;
     Duration::from_secs_f64(seconds.max(0.0))
+}
+
+/**
+    Demux a video file, routing packets to video and audio queues.
+    Runs until EOF or stop flag is set.
+*/
+pub fn demux<P: AsRef<Path>>(
+    path: P,
+    video_packets: Arc<PacketQueue>,
+    audio_packets: Option<Arc<PacketQueue>>,
+    stop_flag: Arc<AtomicBool>,
+) -> Result<(), DecoderError> {
+    ffmpeg_next::init()?;
+
+    let mut input_ctx = input(&path)?;
+
+    // Find stream indices
+    let video_stream_index = input_ctx
+        .streams()
+        .best(Type::Video)
+        .ok_or(DecoderError::NoVideoStream)?
+        .index();
+
+    let audio_stream_index = input_ctx.streams().best(Type::Audio).map(|s| s.index());
+
+    let mut video_pkt_count = 0u64;
+    let mut audio_pkt_count = 0u64;
+
+    // Process all packets
+    for (stream, packet) in input_ctx.packets() {
+        if stop_flag.load(Ordering::Relaxed) {
+            eprintln!("[demux] stopped by flag");
+            break;
+        }
+
+        let stream_index = stream.index();
+
+        if stream_index == video_stream_index {
+            // Route to video packet queue
+            let pkt = Packet::new(
+                packet.data().map(|d| d.to_vec()).unwrap_or_default(),
+                packet.pts().unwrap_or(0),
+                packet.dts().unwrap_or(0),
+                packet.duration(),
+                packet.flags().bits(),
+            );
+            if !video_packets.push(pkt) {
+                eprintln!("[demux] video queue closed");
+                break; // Queue closed
+            }
+            video_pkt_count += 1;
+            if video_pkt_count % 500 == 0 {
+                eprintln!(
+                    "[demux] video packets: {}, audio packets: {}",
+                    video_pkt_count, audio_pkt_count
+                );
+            }
+        } else if Some(stream_index) == audio_stream_index {
+            if let Some(ref audio_queue) = audio_packets {
+                // Route to audio packet queue
+                let pkt = Packet::new(
+                    packet.data().map(|d| d.to_vec()).unwrap_or_default(),
+                    packet.pts().unwrap_or(0),
+                    packet.dts().unwrap_or(0),
+                    packet.duration(),
+                    packet.flags().bits(),
+                );
+                if !audio_queue.push(pkt) {
+                    eprintln!("[demux] audio queue closed");
+                    break; // Queue closed
+                }
+                audio_pkt_count += 1;
+            }
+        }
+    }
+
+    eprintln!(
+        "[demux] finished - video: {}, audio: {}",
+        video_pkt_count, audio_pkt_count
+    );
+
+    // Signal EOF to decode threads
+    video_packets.close();
+    if let Some(ref audio_queue) = audio_packets {
+        audio_queue.close();
+    }
+
+    Ok(())
 }
 
 /**
@@ -150,7 +284,6 @@ fn create_hw_device_ctx() -> Option<*mut ffi::AVBufferRef> {
 */
 fn is_hw_frame(frame: &VideoFrameFFmpeg) -> bool {
     let format = unsafe { (*frame.as_ptr()).format };
-    // VideoToolbox uses AV_PIX_FMT_VIDEOTOOLBOX
     format == ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX as i32
 }
 
@@ -164,302 +297,160 @@ fn transfer_hw_frame(hw_frame: &VideoFrameFFmpeg) -> Result<VideoFrameFFmpeg, De
         if ret < 0 {
             return Err(DecoderError::Ffmpeg(ffmpeg_next::Error::from(ret)));
         }
-        // Copy timing info
         (*sw_frame.as_mut_ptr()).pts = (*hw_frame.as_ptr()).pts;
         Ok(sw_frame)
     }
 }
 
 /**
-    Decode a video file, pushing frames to the queues until stopped or EOF.
-    If audio_producer is provided, audio will also be decoded and pushed directly to the ring buffer.
+    Decode video packets to frames.
+    Runs until packet queue is closed and empty, or stop flag is set.
 */
-pub fn decode_video<P: AsRef<Path>>(
-    path: P,
-    video_queue: Arc<FrameQueue>,
-    audio_producer: Option<Arc<AudioStreamProducer>>,
+pub fn decode_video_packets(
+    packets: Arc<PacketQueue>,
+    frames: Arc<FrameQueue>,
+    codec_params: codec::Parameters,
+    time_base: Rational,
     stop_flag: Arc<AtomicBool>,
     target_width: Option<u32>,
     target_height: Option<u32>,
 ) -> Result<(), DecoderError> {
     ffmpeg_next::init()?;
 
-    let mut input_ctx = input(&path)?;
+    // Create decoder
+    let decoder_ctx = codec::context::Context::from_parameters(codec_params)?;
+    let mut decoder = decoder_ctx.decoder().video()?;
 
-    // Find video stream
-    let video_stream = input_ctx
-        .streams()
-        .best(Type::Video)
-        .ok_or(DecoderError::NoVideoStream)?;
-
-    let video_stream_index = video_stream.index();
-    let video_time_base = video_stream.time_base();
-
-    // Create video decoder
-    let video_codec_params = video_stream.parameters();
-    let video_decoder_ctx = codec::context::Context::from_parameters(video_codec_params)?;
-    let mut video_decoder = video_decoder_ctx.decoder().video()?;
-
-    // Try to enable hardware acceleration
+    // Try hardware acceleration
     let hw_device_ctx = create_hw_device_ctx();
     if let Some(hw_ctx) = hw_device_ctx {
         unsafe {
-            (*video_decoder.as_mut_ptr()).hw_device_ctx = ffi::av_buffer_ref(hw_ctx);
+            (*decoder.as_mut_ptr()).hw_device_ctx = ffi::av_buffer_ref(hw_ctx);
         }
         eprintln!("VideoToolbox hardware acceleration enabled");
     } else {
         eprintln!("Using software decoding");
     }
 
-    // Find audio stream (optional)
-    let audio_stream_info = if audio_producer.is_some() {
-        input_ctx.streams().best(Type::Audio).map(|stream| {
-            let index = stream.index();
-            let time_base = stream.time_base();
-            let params = stream.parameters();
-            (index, time_base, params)
-        })
-    } else {
-        None
-    };
-
-    // Create audio decoder if audio stream exists
-    let mut audio_decoder: Option<codec::decoder::Audio> = None;
-    let mut audio_resampler: Option<ResamplerContext> = None;
-    let mut audio_stream_index: Option<usize> = None;
-
-    if let Some((index, _time_base, params)) = audio_stream_info {
-        match codec::context::Context::from_parameters(params) {
-            Ok(ctx) => match ctx.decoder().audio() {
-                Ok(decoder) => {
-                    audio_stream_index = Some(index);
-                    audio_decoder = Some(decoder);
-                }
-                Err(e) => {
-                    eprintln!("Failed to create audio decoder: {}", e);
-                }
-            },
-            Err(e) => {
-                eprintln!("Failed to create audio codec context: {}", e);
-            }
-        }
-    }
-
-    // Video state
+    // Scaler state
     let mut scaler: Option<ScalerContext> = None;
     let mut scaler_src_format: Option<ffmpeg_next::format::Pixel> = None;
     let mut scaler_src_width: u32 = 0;
     let mut scaler_src_height: u32 = 0;
-    let mut decoded_video_frame = VideoFrameFFmpeg::empty();
+
+    let mut decoded_frame = VideoFrameFFmpeg::empty();
     let mut bgra_frame = VideoFrameFFmpeg::empty();
 
-    // Audio state
-    let mut decoded_audio_frame = AudioFrameFFmpeg::empty();
-    let mut resampled_audio_frame = AudioFrameFFmpeg::empty();
+    let mut frame_count = 0u64;
 
-    // Process all packets
-    for (stream, packet) in input_ctx.packets() {
+    // Process packets
+    while let Some(pkt) = packets.pop() {
         if stop_flag.load(Ordering::Relaxed) {
             break;
         }
 
-        let stream_index = stream.index();
-
-        // Video packet
-        if stream_index == video_stream_index {
-            video_decoder.send_packet(&packet)?;
-
-            // Receive all available video frames
-            while video_decoder
-                .receive_frame(&mut decoded_video_frame)
-                .is_ok()
-            {
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                // If this is a hardware frame, transfer to software
-                let sw_frame = if is_hw_frame(&decoded_video_frame) {
-                    transfer_hw_frame(&decoded_video_frame)?
-                } else {
-                    let mut copy = VideoFrameFFmpeg::empty();
-                    copy.clone_from(&decoded_video_frame);
-                    copy
-                };
-
-                // Initialize or reinitialize scaler if frame properties changed
-                let src_width = sw_frame.width();
-                let src_height = sw_frame.height();
-                let src_format = sw_frame.format();
-
-                let needs_new_scaler = scaler.is_none()
-                    || scaler_src_format != Some(src_format)
-                    || scaler_src_width != src_width
-                    || scaler_src_height != src_height;
-
-                if needs_new_scaler {
-                    let dst_width = target_width.unwrap_or(src_width);
-                    let dst_height = target_height.unwrap_or(src_height);
-
-                    scaler = Some(ScalerContext::get(
-                        src_format,
-                        src_width,
-                        src_height,
-                        ffmpeg_next::format::Pixel::BGRA,
-                        dst_width,
-                        dst_height,
-                        ScalerFlags::BILINEAR,
-                    )?);
-                    scaler_src_format = Some(src_format);
-                    scaler_src_width = src_width;
-                    scaler_src_height = src_height;
-                }
-
-                // Scale/convert to BGRA (native format for GPUI)
-                let scaler = scaler.as_mut().unwrap();
-                scaler.run(&sw_frame, &mut bgra_frame)?;
-
-                let dst_width = bgra_frame.width();
-                let dst_height = bgra_frame.height();
-                let data = bgra_frame.data(0);
-                let stride = bgra_frame.stride(0);
-                let pts = pts_to_duration(sw_frame.pts().unwrap_or(0), video_time_base);
-
-                // Copy data accounting for stride
-                let mut bgra_data = Vec::with_capacity((dst_width * dst_height * 4) as usize);
-                for y in 0..dst_height as usize {
-                    let row_start = y * stride;
-                    let row_end = row_start + (dst_width as usize * 4);
-                    bgra_data.extend_from_slice(&data[row_start..row_end]);
-                }
-
-                let frame = VideoFrame::new(bgra_data, dst_width, dst_height, pts);
-
-                // Push to queue (blocks if full - natural backpressure)
-                if !video_queue.push(frame) {
-                    // Queue was closed
-                    return Ok(());
-                }
-            }
+        // Create FFmpeg packet from our packet
+        let mut ffmpeg_pkt = ffmpeg_next::Packet::empty();
+        if !pkt.data.is_empty() {
+            ffmpeg_pkt = ffmpeg_next::Packet::copy(&pkt.data);
         }
-        // Audio packet
-        else if Some(stream_index) == audio_stream_index {
-            if let (Some(decoder), Some(producer)) = (&mut audio_decoder, &audio_producer) {
-                decoder.send_packet(&packet)?;
+        unsafe {
+            (*ffmpeg_pkt.as_mut_ptr()).pts = pkt.pts;
+            (*ffmpeg_pkt.as_mut_ptr()).dts = pkt.dts;
+            (*ffmpeg_pkt.as_mut_ptr()).duration = pkt.duration;
+        }
 
-                // Receive all available audio frames
-                while decoder.receive_frame(&mut decoded_audio_frame).is_ok() {
-                    if stop_flag.load(Ordering::Relaxed) {
-                        break;
-                    }
+        decoder.send_packet(&ffmpeg_pkt)?;
 
-                    // Initialize or reinitialize resampler if needed
-                    let needs_new_resampler = audio_resampler.is_none();
+        // Receive all available frames
+        while decoder.receive_frame(&mut decoded_frame).is_ok() {
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
+            }
 
-                    if needs_new_resampler {
-                        let src_format = decoder.format();
-                        let src_channel_layout = decoder.channel_layout();
-                        let src_rate = decoder.rate();
+            // Transfer from hardware if needed
+            let sw_frame = if is_hw_frame(&decoded_frame) {
+                transfer_hw_frame(&decoded_frame)?
+            } else {
+                let mut copy = VideoFrameFFmpeg::empty();
+                copy.clone_from(&decoded_frame);
+                copy
+            };
 
-                        match ResamplerContext::get(
-                            src_format,
-                            src_channel_layout,
-                            src_rate,
-                            ffmpeg_next::format::Sample::F32(
-                                ffmpeg_next::format::sample::Type::Packed,
-                            ),
-                            ChannelLayout::STEREO,
-                            DEFAULT_SAMPLE_RATE,
-                        ) {
-                            Ok(resampler) => {
-                                audio_resampler = Some(resampler);
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to create audio resampler: {}", e);
-                                continue;
-                            }
-                        }
-                    }
+            // Initialize/reinitialize scaler if needed
+            let src_width = sw_frame.width();
+            let src_height = sw_frame.height();
+            let src_format = sw_frame.format();
 
-                    if let Some(ref mut resampler) = audio_resampler {
-                        // Run resampler
-                        if let Err(e) =
-                            resampler.run(&decoded_audio_frame, &mut resampled_audio_frame)
-                        {
-                            eprintln!("Audio resampling error: {}", e);
-                            continue;
-                        }
+            let needs_new_scaler = scaler.is_none()
+                || scaler_src_format != Some(src_format)
+                || scaler_src_width != src_width
+                || scaler_src_height != src_height;
 
-                        // Extract f32 samples from resampled frame
-                        let samples = resampled_audio_frame.samples();
-                        let channels = 2u16; // Stereo output
-                        let plane_data = resampled_audio_frame.data(0);
+            if needs_new_scaler {
+                let dst_width = target_width.unwrap_or(src_width);
+                let dst_height = target_height.unwrap_or(src_height);
 
-                        // Convert bytes to f32 samples
-                        let float_samples: Vec<f32> = plane_data
-                            .chunks_exact(4)
-                            .take(samples * channels as usize)
-                            .map(|chunk| {
-                                f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
-                            })
-                            .collect();
+                scaler = Some(ScalerContext::get(
+                    src_format,
+                    src_width,
+                    src_height,
+                    ffmpeg_next::format::Pixel::BGRA,
+                    dst_width,
+                    dst_height,
+                    ScalerFlags::BILINEAR,
+                )?);
+                scaler_src_format = Some(src_format);
+                scaler_src_width = src_width;
+                scaler_src_height = src_height;
+            }
 
-                        if !float_samples.is_empty() {
-                            // Push directly to ring buffer (lock-free, non-blocking)
-                            // If buffer is full, we drop samples - this shouldn't happen
-                            // if the ring buffer is sized appropriately
-                            producer.push(&float_samples);
-                        }
-                    }
-                }
+            // Scale to BGRA
+            let scaler = scaler.as_mut().unwrap();
+            scaler.run(&sw_frame, &mut bgra_frame)?;
+
+            let dst_width = bgra_frame.width();
+            let dst_height = bgra_frame.height();
+            let data = bgra_frame.data(0);
+            let stride = bgra_frame.stride(0);
+            let pts = pts_to_duration(sw_frame.pts().unwrap_or(0), time_base);
+
+            // Copy data accounting for stride
+            let mut bgra_data = Vec::with_capacity((dst_width * dst_height * 4) as usize);
+            for y in 0..dst_height as usize {
+                let row_start = y * stride;
+                let row_end = row_start + (dst_width as usize * 4);
+                bgra_data.extend_from_slice(&data[row_start..row_end]);
+            }
+
+            let frame = VideoFrame::new(bgra_data, dst_width, dst_height, pts);
+
+            // Push to frame queue (blocks if full - this is fine, doesn't affect audio)
+            if !frames.push(frame) {
+                eprintln!("[video_decode] frame queue closed");
+                break; // Queue closed
+            }
+            frame_count += 1;
+            if frame_count % 100 == 0 {
+                eprintln!("[video_decode] frames decoded: {}", frame_count);
             }
         }
     }
 
-    // Flush video decoder
-    video_decoder.send_eof()?;
-    while video_decoder
-        .receive_frame(&mut decoded_video_frame)
-        .is_ok()
-    {
+    // Flush decoder
+    decoder.send_eof()?;
+    while decoder.receive_frame(&mut decoded_frame).is_ok() {
         if stop_flag.load(Ordering::Relaxed) {
             break;
         }
 
-        let sw_frame = if is_hw_frame(&decoded_video_frame) {
-            transfer_hw_frame(&decoded_video_frame)?
+        let sw_frame = if is_hw_frame(&decoded_frame) {
+            transfer_hw_frame(&decoded_frame)?
         } else {
             let mut copy = VideoFrameFFmpeg::empty();
-            copy.clone_from(&decoded_video_frame);
+            copy.clone_from(&decoded_frame);
             copy
         };
-
-        let src_width = sw_frame.width();
-        let src_height = sw_frame.height();
-        let src_format = sw_frame.format();
-
-        let needs_new_scaler = scaler.is_none()
-            || scaler_src_format != Some(src_format)
-            || scaler_src_width != src_width
-            || scaler_src_height != src_height;
-
-        if needs_new_scaler {
-            let dst_width = target_width.unwrap_or(src_width);
-            let dst_height = target_height.unwrap_or(src_height);
-
-            scaler = Some(ScalerContext::get(
-                src_format,
-                src_width,
-                src_height,
-                ffmpeg_next::format::Pixel::BGRA,
-                dst_width,
-                dst_height,
-                ScalerFlags::BILINEAR,
-            )?);
-            scaler_src_format = Some(src_format);
-            scaler_src_width = src_width;
-            scaler_src_height = src_height;
-        }
 
         if let Some(ref mut scaler) = scaler {
             scaler.run(&sw_frame, &mut bgra_frame)?;
@@ -468,7 +459,7 @@ pub fn decode_video<P: AsRef<Path>>(
             let dst_height = bgra_frame.height();
             let data = bgra_frame.data(0);
             let stride = bgra_frame.stride(0);
-            let pts = pts_to_duration(sw_frame.pts().unwrap_or(0), video_time_base);
+            let pts = pts_to_duration(sw_frame.pts().unwrap_or(0), time_base);
 
             let mut bgra_data = Vec::with_capacity((dst_width * dst_height * 4) as usize);
             for y in 0..dst_height as usize {
@@ -478,29 +469,105 @@ pub fn decode_video<P: AsRef<Path>>(
             }
 
             let frame = VideoFrame::new(bgra_data, dst_width, dst_height, pts);
-            if !video_queue.push(frame) {
+            if !frames.push(frame) {
                 break;
             }
         }
     }
 
-    // Flush audio decoder
-    if let Some(ref mut decoder) = audio_decoder {
-        let _ = decoder.send_eof();
-        while decoder.receive_frame(&mut decoded_audio_frame).is_ok() {
+    // Clean up hardware context
+    if let Some(hw_ctx) = hw_device_ctx {
+        unsafe {
+            ffi::av_buffer_unref(&mut (hw_ctx as *mut _));
+        }
+    }
+
+    // Signal completion
+    frames.close();
+
+    Ok(())
+}
+
+/**
+    Decode audio packets to samples.
+    Runs until packet queue is closed and empty, or stop flag is set.
+*/
+pub fn decode_audio_packets(
+    packets: Arc<PacketQueue>,
+    producer: Arc<AudioStreamProducer>,
+    codec_params: codec::Parameters,
+    _time_base: Rational,
+    stop_flag: Arc<AtomicBool>,
+) -> Result<(), DecoderError> {
+    ffmpeg_next::init()?;
+
+    // Create decoder
+    let decoder_ctx = codec::context::Context::from_parameters(codec_params)?;
+    let mut decoder = decoder_ctx.decoder().audio()?;
+
+    let mut resampler: Option<ResamplerContext> = None;
+    let mut decoded_frame = AudioFrameFFmpeg::empty();
+    let mut resampled_frame = AudioFrameFFmpeg::empty();
+
+    let mut packet_count = 0u64;
+    let mut sample_count = 0u64;
+
+    // Process packets
+    while let Some(pkt) = packets.pop() {
+        if stop_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Create FFmpeg packet
+        let mut ffmpeg_pkt = ffmpeg_next::Packet::empty();
+        if !pkt.data.is_empty() {
+            ffmpeg_pkt = ffmpeg_next::Packet::copy(&pkt.data);
+        }
+        unsafe {
+            (*ffmpeg_pkt.as_mut_ptr()).pts = pkt.pts;
+            (*ffmpeg_pkt.as_mut_ptr()).dts = pkt.dts;
+            (*ffmpeg_pkt.as_mut_ptr()).duration = pkt.duration;
+        }
+
+        decoder.send_packet(&ffmpeg_pkt)?;
+
+        // Receive all available frames
+        while decoder.receive_frame(&mut decoded_frame).is_ok() {
             if stop_flag.load(Ordering::Relaxed) {
                 break;
             }
 
-            if let (Some(resampler), Some(producer)) = (&mut audio_resampler, &audio_producer) {
-                if let Err(e) = resampler.run(&decoded_audio_frame, &mut resampled_audio_frame) {
-                    eprintln!("Audio resampling error during flush: {}", e);
+            // Initialize resampler if needed
+            if resampler.is_none() {
+                let src_format = decoder.format();
+                let src_channel_layout = decoder.channel_layout();
+                let src_rate = decoder.rate();
+
+                match ResamplerContext::get(
+                    src_format,
+                    src_channel_layout,
+                    src_rate,
+                    ffmpeg_next::format::Sample::F32(ffmpeg_next::format::sample::Type::Packed),
+                    ChannelLayout::STEREO,
+                    DEFAULT_SAMPLE_RATE,
+                ) {
+                    Ok(r) => resampler = Some(r),
+                    Err(e) => {
+                        eprintln!("Failed to create audio resampler: {}", e);
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(ref mut resampler) = resampler {
+                if let Err(e) = resampler.run(&decoded_frame, &mut resampled_frame) {
+                    eprintln!("Audio resampling error: {}", e);
                     continue;
                 }
 
-                let samples = resampled_audio_frame.samples();
+                let samples = resampled_frame.samples();
                 let channels = 2u16;
-                let plane_data = resampled_audio_frame.data(0);
+                let plane_data = resampled_frame.data(0);
 
                 let float_samples: Vec<f32> = plane_data
                     .chunks_exact(4)
@@ -509,24 +576,62 @@ pub fn decode_video<P: AsRef<Path>>(
                     .collect();
 
                 if !float_samples.is_empty() {
-                    producer.push(&float_samples);
+                    // Push to ring buffer (blocks if full)
+                    if !producer.push(&float_samples) {
+                        eprintln!("[audio_decode] producer closed");
+                        break;
+                    }
+                    sample_count += float_samples.len() as u64;
+                }
+            }
+        }
+        packet_count += 1;
+        if packet_count % 500 == 0 {
+            eprintln!(
+                "[audio_decode] packets: {}, samples: {}",
+                packet_count, sample_count
+            );
+        }
+    }
+
+    eprintln!(
+        "[audio_decode] finished - packets: {}, samples: {}",
+        packet_count, sample_count
+    );
+
+    // Flush decoder
+    let _ = decoder.send_eof();
+    while decoder.receive_frame(&mut decoded_frame).is_ok() {
+        if stop_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if let Some(ref mut resampler) = resampler {
+            if let Err(e) = resampler.run(&decoded_frame, &mut resampled_frame) {
+                eprintln!("Audio resampling error during flush: {}", e);
+                continue;
+            }
+
+            let samples = resampled_frame.samples();
+            let channels = 2u16;
+            let plane_data = resampled_frame.data(0);
+
+            let float_samples: Vec<f32> = plane_data
+                .chunks_exact(4)
+                .take(samples * channels as usize)
+                .map(|chunk| f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect();
+
+            if !float_samples.is_empty() {
+                if !producer.push(&float_samples) {
+                    break;
                 }
             }
         }
     }
 
-    // Clean up hardware device context
-    if let Some(hw_ctx) = hw_device_ctx {
-        unsafe {
-            ffi::av_buffer_unref(&mut (hw_ctx as *mut _));
-        }
-    }
-
-    // Signal that decoding is complete
-    video_queue.close();
-    if let Some(ref producer) = audio_producer {
-        producer.close();
-    }
+    // Signal completion
+    producer.close();
 
     Ok(())
 }
