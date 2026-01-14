@@ -6,7 +6,7 @@
 
 ## The Problem
 
-The application freezes after approximately 2100 frames are decoded by ANY single video. Multiple attempted fixes have failed because they addressed symptoms, not the root cause.
+A video being played freezes after a few thousand frames are decoded. Other continue playing until they run into the same freezing issue. Multiple attempted fixes have failed because they addressed symptoms, not the root cause.
 
 ## Why All Fixes Have Failed
 
@@ -84,12 +84,12 @@ The ONLY way to fix this is **complete pipeline separation**. Audio and video mu
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           AUDIO PIPELINE (independent)                       │
+│                           AUDIO PIPELINE (independent)                      │
 │                                                                             │
-│  ┌──────────┐    ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌────────┐ │
-│  │  File    │───▶│  Audio  │───▶│  Audio   │───▶│   Ring   │───▶│  cpal  │ │
-│  │ (handle) │    │  Demux  │    │  Decode  │    │  Buffer  │    │callback│ │
-│  └──────────┘    └─────────┘    └──────────┘    └──────────┘    └───┬────┘ │
+│  ┌──────────┐    ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌────────┐  │
+│  │  File    │───▶│  Audio  │───▶│  Audio   │───▶│   Ring   │───▶│  cpal  │  │
+│  │ (handle) │    │  Demux  │    │  Decode  │    │  Buffer  │    │callback│  │
+│  └──────────┘    └─────────┘    └──────────┘    └──────────┘    └────┬───┘  │
 │                                                                      │      │
 │                                                              updates clock  │
 └──────────────────────────────────────────────────────────────────────┼──────┘
@@ -105,10 +105,10 @@ The ONLY way to fix this is **complete pipeline separation**. Audio and video mu
 ┌──────────────────────────────────────────────────────────────────────┼──────┐
 │                           VIDEO PIPELINE (independent)               │      │
 │                                                                      ▼      │
-│  ┌──────────┐    ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌────────┐ │
-│  │  File    │───▶│  Video  │───▶│  Video   │───▶│  Frame   │───▶│ Video  │ │
-│  │ (handle) │    │  Demux  │    │  Decode  │    │  Queue   │    │ Player │ │
-│  └──────────┘    └─────────┘    └──────────┘    └──────────┘    └────────┘ │
+│  ┌──────────┐    ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌────────┐  │
+│  │  File    │───▶│  Video  │───▶│  Video   │───▶│  Frame   │───▶│ Video  │  │
+│  │ (handle) │    │  Demux  │    │  Decode  │    │  Queue   │    │ Player │  │
+│  └──────────┘    └─────────┘    └──────────┘    └──────────┘    └────────┘  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -289,7 +289,7 @@ Delete the old coupled architecture:
 
 ## Testing the Fix
 
-1. Run with 4 videos simultaneously
+1. The user will run the application, which plays 4 videos simultaneously
 2. Verify playback continues past 2100 frames (the previous freeze point)
 3. Verify A/V sync is maintained
 4. Verify no audio dropouts or video stuttering under normal conditions
