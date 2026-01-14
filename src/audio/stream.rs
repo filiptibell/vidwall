@@ -201,6 +201,10 @@ pub struct AudioStreamConsumer {
     volume: AtomicF32,
     /// Shared with producer - set when producer signals end of stream
     closed: Arc<AtomicBool>,
+    /// When paused, fill_buffer outputs silence without consuming samples
+    paused: AtomicBool,
+    /// When muted, fill_buffer outputs silence but still consumes samples
+    muted: AtomicBool,
     /// Shared clock for tracking playback position
     clock: Arc<AudioStreamClock>,
 }
@@ -226,6 +230,46 @@ impl AudioStreamConsumer {
         self.volume.store(volume.clamp(0.0, 1.0), Ordering::Relaxed);
     }
 
+    /// Pause audio playback. When paused, fill_buffer outputs silence
+    /// without consuming samples from the ring buffer.
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::Relaxed);
+    }
+
+    /// Resume audio playback after being paused.
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::Relaxed);
+    }
+
+    /// Check if audio is paused
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    /// Mute audio output. When muted, fill_buffer outputs silence
+    /// but still consumes samples (playback continues silently).
+    pub fn mute(&self) {
+        self.muted.store(true, Ordering::Relaxed);
+    }
+
+    /// Unmute audio output.
+    pub fn unmute(&self) {
+        self.muted.store(false, Ordering::Relaxed);
+    }
+
+    /// Toggle mute state. Returns the new muted state.
+    pub fn toggle_mute(&self) -> bool {
+        // Note: This isn't perfectly atomic but is fine for UI toggling
+        let was_muted = self.muted.load(Ordering::Relaxed);
+        self.muted.store(!was_muted, Ordering::Relaxed);
+        !was_muted
+    }
+
+    /// Check if audio is muted
+    pub fn is_muted(&self) -> bool {
+        self.muted.load(Ordering::Relaxed)
+    }
+
     /// Check if the stream has ended
     pub fn is_ended(&self) -> bool {
         // SAFETY: is_empty() only reads atomic state
@@ -247,11 +291,23 @@ impl AudioStreamConsumer {
     /// This is completely lock-free and safe for real-time audio.
     /// Updates the shared clock with the number of samples actually consumed.
     ///
+    /// When paused, outputs silence without consuming samples.
+    /// When muted, outputs silence but still consumes samples (playback continues).
+    ///
     /// When the audio stream ends (closed and empty), marks the clock as finished
     /// so it can switch to wall-time extrapolation for remaining video frames.
     ///
     /// Returns: Number of actual audio samples written (not silence)
     pub fn fill_buffer(&self, output: &mut [f32]) -> usize {
+        // If paused, output silence without consuming samples
+        if self.paused.load(Ordering::Relaxed) {
+            for sample in output.iter_mut() {
+                *sample = 0.0;
+            }
+            return 0;
+        }
+
+        let is_muted = self.muted.load(Ordering::Relaxed);
         let volume = self.volume();
 
         // SAFETY: Only one thread (audio callback) calls fill_buffer, and ringbuf's
@@ -266,9 +322,15 @@ impl AudioStreamConsumer {
             // Update the shared clock with samples consumed
             self.clock.add_samples(read as u64);
 
-            // Apply volume to the samples we read
-            for sample in &mut output[..read] {
-                *sample *= volume;
+            // Apply volume (or silence if muted) to the samples we read
+            if is_muted {
+                for sample in &mut output[..read] {
+                    *sample = 0.0;
+                }
+            } else {
+                for sample in &mut output[..read] {
+                    *sample *= volume;
+                }
             }
 
             // Fill remaining with silence
@@ -316,6 +378,8 @@ pub fn create_audio_stream() -> (
             consumer: UnsafeCell::new(consumer),
             volume: AtomicF32::new(1.0),
             closed,
+            paused: AtomicBool::new(false),
+            muted: AtomicBool::new(false),
             clock: Arc::clone(&clock),
         },
         clock,

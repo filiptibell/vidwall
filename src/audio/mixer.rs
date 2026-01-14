@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::RwLock;
 
@@ -13,13 +13,14 @@ const MIX_BUFFER_SIZE: usize = 4096;
 
 /**
     Audio mixer that combines multiple audio streams into a single output.
-    Supports per-stream volume (via AudioStreamConsumer) and master volume.
+    Supports per-stream volume (via AudioStreamConsumer), master volume, and master mute.
 
     Designed for real-time audio: uses RwLock with try_read to avoid blocking.
 */
 pub struct AudioMixer {
     streams: RwLock<[Option<Arc<AudioStreamConsumer>>; MIXER_STREAM_COUNT]>,
     master_volume: AtomicF32,
+    master_muted: AtomicBool,
     sample_rate: u32,
     channels: u16,
 }
@@ -29,6 +30,7 @@ impl AudioMixer {
         Self {
             streams: RwLock::new([None, None, None, None]),
             master_volume: AtomicF32::new(1.0),
+            master_muted: AtomicBool::new(false),
             sample_rate,
             channels,
         }
@@ -53,6 +55,28 @@ impl AudioMixer {
     pub fn set_master_volume(&self, volume: f32) {
         self.master_volume
             .store(volume.clamp(0.0, 1.0), Ordering::Relaxed);
+    }
+
+    /// Mute all audio output
+    pub fn mute(&self) {
+        self.master_muted.store(true, Ordering::Relaxed);
+    }
+
+    /// Unmute audio output
+    pub fn unmute(&self) {
+        self.master_muted.store(false, Ordering::Relaxed);
+    }
+
+    /// Toggle master mute state. Returns the new muted state.
+    pub fn toggle_mute(&self) -> bool {
+        let was_muted = self.master_muted.load(Ordering::Relaxed);
+        self.master_muted.store(!was_muted, Ordering::Relaxed);
+        !was_muted
+    }
+
+    /// Check if master audio is muted
+    pub fn is_muted(&self) -> bool {
+        self.master_muted.load(Ordering::Relaxed)
     }
 
     /// Set a stream at the given index (0-3). Uses write lock.
@@ -82,6 +106,8 @@ impl AudioMixer {
         output: Interleaved stereo buffer to fill
     */
     pub fn fill_buffer(&self, output: &mut [f32]) {
+        // If master muted, output silence (but still consume samples from streams)
+        let is_muted = self.master_muted.load(Ordering::Relaxed);
         let master_vol = self.master_volume();
 
         // Clear output buffer first
@@ -122,9 +148,15 @@ impl AudioMixer {
             }
         }
 
-        // Apply master volume and clamp to prevent clipping
-        for sample in output.iter_mut() {
-            *sample = (*sample * master_vol).clamp(-1.0, 1.0);
+        // Apply master volume and clamp to prevent clipping (or silence if muted)
+        if is_muted {
+            for sample in output.iter_mut() {
+                *sample = 0.0;
+            }
+        } else {
+            for sample in output.iter_mut() {
+                *sample = (*sample * master_vol).clamp(-1.0, 1.0);
+            }
         }
     }
 }

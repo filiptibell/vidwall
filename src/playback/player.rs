@@ -21,6 +21,7 @@ use super::video_pipeline::VideoPipeline;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackState {
     Playing,
+    Paused,
     Ended,
     Error,
 }
@@ -29,20 +30,29 @@ pub enum PlaybackState {
     Playback clock abstraction.
 
     For videos WITH audio: Uses AudioStreamClock (audio is master).
-    When audio finishes, AudioStreamClock automatically extrapolates
-    using wall time so remaining video frames continue to display.
+    Pausing works by pausing the audio consumer, which stops samples
+    from being consumed, naturally freezing the clock position.
 
-    For videos WITHOUT audio: Uses wall clock from start instant.
+    For videos WITHOUT audio: Uses wall clock with pause support
+    via accumulated time tracking.
 */
 pub enum PlaybackClock {
+    /// Audio-driven clock - position comes from samples consumed
     Audio(Arc<AudioStreamClock>),
-    WallTime { start: Instant },
+    /// Wall-time clock with pause support
+    WallTime {
+        /// Time accumulated before current play session
+        accumulated: Mutex<Duration>,
+        /// When we last started/resumed, None if paused
+        playing_since: Mutex<Option<Instant>>,
+    },
 }
 
 impl PlaybackClock {
     pub fn wall_time() -> Self {
         Self::WallTime {
-            start: Instant::now(),
+            accumulated: Mutex::new(Duration::ZERO),
+            playing_since: Mutex::new(Some(Instant::now())),
         }
     }
 
@@ -53,7 +63,43 @@ impl PlaybackClock {
     pub fn position(&self) -> Duration {
         match self {
             Self::Audio(clock) => clock.position(),
-            Self::WallTime { start } => start.elapsed(),
+            Self::WallTime {
+                accumulated,
+                playing_since,
+            } => {
+                let acc = *accumulated.lock().unwrap();
+                match *playing_since.lock().unwrap() {
+                    Some(since) => acc + since.elapsed(),
+                    None => acc, // Paused - return frozen position
+                }
+            }
+        }
+    }
+
+    /// Pause the clock. For wall-time clocks, freezes the position.
+    /// For audio clocks, this is a no-op (audio consumer handles pause).
+    pub fn pause(&self) {
+        if let Self::WallTime {
+            accumulated,
+            playing_since,
+        } = self
+        {
+            let mut since = playing_since.lock().unwrap();
+            if let Some(start) = since.take() {
+                // Save accumulated time and clear playing_since
+                *accumulated.lock().unwrap() += start.elapsed();
+            }
+        }
+    }
+
+    /// Resume the clock. For wall-time clocks, starts tracking time again.
+    /// For audio clocks, this is a no-op (audio consumer handles resume).
+    pub fn resume(&self) {
+        if let Self::WallTime { playing_since, .. } = self {
+            let mut since = playing_since.lock().unwrap();
+            if since.is_none() {
+                *since = Some(Instant::now());
+            }
         }
     }
 }
@@ -184,6 +230,52 @@ impl VideoPlayer {
     }
 
     /**
+        Check if playback is paused
+    */
+    pub fn is_paused(&self) -> bool {
+        self.state() == PlaybackState::Paused
+    }
+
+    /**
+        Pause video and audio playback
+    */
+    pub fn pause(&self) {
+        let mut state = self.state.lock().unwrap();
+        if *state == PlaybackState::Playing {
+            *state = PlaybackState::Paused;
+            self.playback_clock.pause();
+            if let Some(ref audio) = self.audio_pipeline {
+                audio.consumer().pause();
+            }
+        }
+    }
+
+    /**
+        Resume video and audio playback
+    */
+    pub fn resume(&self) {
+        let mut state = self.state.lock().unwrap();
+        if *state == PlaybackState::Paused {
+            *state = PlaybackState::Playing;
+            self.playback_clock.resume();
+            if let Some(ref audio) = self.audio_pipeline {
+                audio.consumer().resume();
+            }
+        }
+    }
+
+    /**
+        Toggle between paused and playing states
+    */
+    pub fn toggle_pause(&self) {
+        if self.is_paused() {
+            self.resume();
+        } else {
+            self.pause();
+        }
+    }
+
+    /**
         Get the audio stream consumer if this video has audio
     */
     pub fn audio_consumer(&self) -> Option<&Arc<AudioStreamConsumer>> {
@@ -221,6 +313,44 @@ impl VideoPlayer {
     */
     pub fn has_audio(&self) -> bool {
         self.audio_pipeline.is_some()
+    }
+
+    /**
+        Mute this video's audio
+    */
+    pub fn mute(&self) {
+        if let Some(ref audio) = self.audio_pipeline {
+            audio.consumer().mute();
+        }
+    }
+
+    /**
+        Unmute this video's audio
+    */
+    pub fn unmute(&self) {
+        if let Some(ref audio) = self.audio_pipeline {
+            audio.consumer().unmute();
+        }
+    }
+
+    /**
+        Toggle mute state. Returns the new muted state.
+    */
+    pub fn toggle_mute(&self) -> bool {
+        self.audio_pipeline
+            .as_ref()
+            .map(|a| a.consumer().toggle_mute())
+            .unwrap_or(false)
+    }
+
+    /**
+        Check if this video's audio is muted
+    */
+    pub fn is_muted(&self) -> bool {
+        self.audio_pipeline
+            .as_ref()
+            .map(|a| a.consumer().is_muted())
+            .unwrap_or(false)
     }
 
     /**
