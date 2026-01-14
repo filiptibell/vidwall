@@ -203,6 +203,9 @@ pub fn decode_video<P: AsRef<Path>>(
     }
 
     let mut scaler: Option<ScalerContext> = None;
+    let mut scaler_src_format: Option<ffmpeg_next::format::Pixel> = None;
+    let mut scaler_src_width: u32 = 0;
+    let mut scaler_src_height: u32 = 0;
     let mut decoded_frame = VideoFrameFFmpeg::empty();
     let mut bgra_frame = VideoFrameFFmpeg::empty();
 
@@ -234,12 +237,17 @@ pub fn decode_video<P: AsRef<Path>>(
                 copy
             };
 
-            // Initialize scaler on first frame
-            if scaler.is_none() {
-                let src_width = sw_frame.width();
-                let src_height = sw_frame.height();
-                let src_format = sw_frame.format();
+            // Initialize or reinitialize scaler if frame properties changed
+            let src_width = sw_frame.width();
+            let src_height = sw_frame.height();
+            let src_format = sw_frame.format();
 
+            let needs_new_scaler = scaler.is_none()
+                || scaler_src_format != Some(src_format)
+                || scaler_src_width != src_width
+                || scaler_src_height != src_height;
+
+            if needs_new_scaler {
                 let dst_width = target_width.unwrap_or(src_width);
                 let dst_height = target_height.unwrap_or(src_height);
 
@@ -252,6 +260,9 @@ pub fn decode_video<P: AsRef<Path>>(
                     dst_height,
                     ScalerFlags::BILINEAR,
                 )?);
+                scaler_src_format = Some(src_format);
+                scaler_src_width = src_width;
+                scaler_src_height = src_height;
             }
 
             // Scale/convert to BGRA (native format for GPUI)
@@ -297,6 +308,34 @@ pub fn decode_video<P: AsRef<Path>>(
             copy.clone_from(&decoded_frame);
             copy
         };
+
+        // Reinitialize scaler if frame properties changed
+        let src_width = sw_frame.width();
+        let src_height = sw_frame.height();
+        let src_format = sw_frame.format();
+
+        let needs_new_scaler = scaler.is_none()
+            || scaler_src_format != Some(src_format)
+            || scaler_src_width != src_width
+            || scaler_src_height != src_height;
+
+        if needs_new_scaler {
+            let dst_width = target_width.unwrap_or(src_width);
+            let dst_height = target_height.unwrap_or(src_height);
+
+            scaler = Some(ScalerContext::get(
+                src_format,
+                src_width,
+                src_height,
+                ffmpeg_next::format::Pixel::BGRA,
+                dst_width,
+                dst_height,
+                ScalerFlags::BILINEAR,
+            )?);
+            scaler_src_format = Some(src_format);
+            scaler_src_width = src_width;
+            scaler_src_height = src_height;
+        }
 
         if let Some(ref mut scaler) = scaler {
             scaler.run(&sw_frame, &mut bgra_frame)?;
