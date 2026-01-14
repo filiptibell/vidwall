@@ -12,8 +12,9 @@ use image::{Frame, RgbaImage};
 use super::decoder::{DecoderError, decode_video, get_video_info};
 use super::frame::VideoFrame;
 use super::queue::FrameQueue;
+use crate::audio::{AudioStreamConsumer, AudioStreamProducer, create_audio_stream};
 
-const DEFAULT_QUEUE_CAPACITY: usize = 60;
+const DEFAULT_VIDEO_QUEUE_CAPACITY: usize = 60;
 
 /**
     Playback state
@@ -30,7 +31,9 @@ pub enum PlaybackState {
 */
 pub struct VideoPlayer {
     path: PathBuf,
-    queue: Arc<FrameQueue>,
+    video_queue: Arc<FrameQueue>,
+    audio_producer: Option<Arc<AudioStreamProducer>>,
+    audio_consumer: Option<Arc<AudioStreamConsumer>>,
     stop_flag: Arc<AtomicBool>,
     decoder_handle: Option<JoinHandle<Result<(), DecoderError>>>,
     start_time: Instant,
@@ -62,19 +65,30 @@ impl VideoPlayer {
     ) -> Result<Self, DecoderError> {
         let path = path.as_ref().to_path_buf();
         let info = get_video_info(&path)?;
+        let start_time = Instant::now();
 
-        let queue = Arc::new(FrameQueue::new(DEFAULT_QUEUE_CAPACITY));
+        let video_queue = Arc::new(FrameQueue::new(DEFAULT_VIDEO_QUEUE_CAPACITY));
         let stop_flag = Arc::new(AtomicBool::new(false));
+
+        // Create audio stream if video has audio
+        let (audio_producer, audio_consumer) = if info.has_audio {
+            let (producer, consumer) = create_audio_stream();
+            (Some(Arc::new(producer)), Some(Arc::new(consumer)))
+        } else {
+            (None, None)
+        };
 
         // Spawn decoder thread
         let decoder_path = path.clone();
-        let decoder_queue = Arc::clone(&queue);
+        let decoder_video_queue = Arc::clone(&video_queue);
+        let decoder_audio_producer = audio_producer.clone();
         let decoder_stop = Arc::clone(&stop_flag);
 
         let decoder_handle = thread::spawn(move || {
             decode_video(
                 decoder_path,
-                decoder_queue,
+                decoder_video_queue,
+                decoder_audio_producer,
                 decoder_stop,
                 target_width,
                 target_height,
@@ -83,10 +97,12 @@ impl VideoPlayer {
 
         Ok(Self {
             path,
-            queue,
+            video_queue,
+            audio_producer,
+            audio_consumer,
             stop_flag,
             decoder_handle: Some(decoder_handle),
-            start_time: Instant::now(),
+            start_time,
             current_frame: Mutex::new(None),
             next_frame: Mutex::new(None),
             base_pts: Mutex::new(None),
@@ -134,6 +150,39 @@ impl VideoPlayer {
     }
 
     /**
+        Get the audio stream consumer if this video has audio
+    */
+    pub fn audio_consumer(&self) -> Option<&Arc<AudioStreamConsumer>> {
+        self.audio_consumer.as_ref()
+    }
+
+    /**
+        Set the volume for this video's audio (0.0 to 1.0)
+    */
+    pub fn set_volume(&self, volume: f32) {
+        if let Some(ref consumer) = self.audio_consumer {
+            consumer.set_volume(volume);
+        }
+    }
+
+    /**
+        Get the current volume for this video's audio (0.0 to 1.0)
+    */
+    pub fn volume(&self) -> f32 {
+        self.audio_consumer
+            .as_ref()
+            .map(|c| c.volume())
+            .unwrap_or(0.0)
+    }
+
+    /**
+        Check if this video has an audio track
+    */
+    pub fn has_audio(&self) -> bool {
+        self.audio_consumer.is_some()
+    }
+
+    /**
         Get the cached RenderImage for the current frame.
         Only creates a new RenderImage when the frame actually changes.
         Returns (current_image, old_image_to_drop) - caller should drop the old image via window.drop_image()
@@ -152,7 +201,7 @@ impl VideoPlayer {
 
         // If we don't have a next frame buffered, try to get one
         if next.is_none() {
-            *next = self.queue.try_pop();
+            *next = self.video_queue.try_pop();
         }
 
         // Initialize base_pts from the first frame
@@ -176,12 +225,12 @@ impl VideoPlayer {
                 self.frame_generation.fetch_add(1, Ordering::Relaxed);
 
                 // Pre-fetch the next frame
-                *next = self.queue.try_pop();
+                *next = self.video_queue.try_pop();
             }
         }
 
         // Check for end of playback
-        if next.is_none() && self.queue.is_closed() {
+        if next.is_none() && self.video_queue.is_closed() {
             if current.is_some() {
                 let base = base_pts.unwrap_or(Duration::ZERO);
                 let adjusted_duration = self.duration.saturating_sub(base);
@@ -214,10 +263,20 @@ impl VideoPlayer {
     }
 
     /**
-        Get the number of buffered frames
+        Get the number of buffered video frames
     */
     pub fn buffered_frames(&self) -> usize {
-        self.queue.len()
+        self.video_queue.len()
+    }
+
+    /**
+        Get the number of buffered audio samples
+    */
+    pub fn buffered_audio_samples(&self) -> usize {
+        self.audio_consumer
+            .as_ref()
+            .map(|c| c.available())
+            .unwrap_or(0)
     }
 
     /**
@@ -225,7 +284,10 @@ impl VideoPlayer {
     */
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
-        self.queue.close();
+        self.video_queue.close();
+        if let Some(ref producer) = self.audio_producer {
+            producer.close();
+        }
 
         if let Some(handle) = self.decoder_handle.take() {
             let _ = handle.join();

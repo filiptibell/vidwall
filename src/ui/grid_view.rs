@@ -5,6 +5,7 @@ use std::time::Duration;
 use gpui::{AsyncApp, Context, WeakEntity, Window, div, prelude::*, rgb};
 use rand::seq::SliceRandom;
 
+use crate::audio::AudioMixer;
 use crate::video::VideoPlayer;
 
 use super::video_element::video_element;
@@ -17,12 +18,14 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub struct VideoGridView {
     players: [Arc<VideoPlayer>; 4],
     all_video_paths: Vec<PathBuf>,
+    mixer: Arc<AudioMixer>,
 }
 
 impl VideoGridView {
     pub fn new(
         players: [Arc<VideoPlayer>; 4],
         all_video_paths: Vec<PathBuf>,
+        mixer: Arc<AudioMixer>,
         cx: &mut Context<Self>,
     ) -> Self {
         // Start polling task to check for ended videos and request repaints
@@ -49,6 +52,7 @@ impl VideoGridView {
         Self {
             players,
             all_video_paths,
+            mixer,
         }
     }
 
@@ -58,6 +62,9 @@ impl VideoGridView {
     fn check_and_replace_ended_videos(&mut self, _cx: &mut Context<Self>) {
         for i in 0..4 {
             if self.players[i].is_ended() {
+                // Remove old audio stream from mixer
+                self.mixer.set_stream(i, None);
+
                 if let Some(new_player) = self.create_replacement_player() {
                     let path = new_player.path();
                     println!(
@@ -65,6 +72,12 @@ impl VideoGridView {
                         i,
                         path.file_name().unwrap_or_default().to_string_lossy()
                     );
+
+                    // Register new audio consumer with mixer
+                    if let Some(audio_consumer) = new_player.audio_consumer() {
+                        self.mixer.set_stream(i, Some(Arc::clone(audio_consumer)));
+                    }
+
                     self.players[i] = Arc::new(new_player);
                 }
             }
@@ -85,6 +98,13 @@ impl VideoGridView {
                 None
             }
         }
+    }
+
+    /**
+        Get a reference to the audio mixer
+    */
+    pub fn mixer(&self) -> &Arc<AudioMixer> {
+        &self.mixer
     }
 }
 

@@ -19,9 +19,11 @@ use gpui::{App, AppContext, Application, AsyncApp, Bounds, WindowBounds, WindowO
 use rand::seq::SliceRandom;
 use walkdir::WalkDir;
 
+mod audio;
 mod ui;
 mod video;
 
+use audio::{AudioMixer, AudioOutput, DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 use ui::VideoGridView;
 use video::VideoPlayer;
 
@@ -110,9 +112,8 @@ fn open_grid_with_folder(folder: PathBuf, cx: &mut App) {
 
     println!("Found {} videos in {:?}", all_videos.len(), folder);
 
-    // Calculate target dimensions (half window size for each cell)
-    let cell_width = DEFAULT_WIDTH / 2;
-    let cell_height = DEFAULT_HEIGHT / 2;
+    // Initialize audio mixer (output created later to avoid premature drop)
+    let mixer = Arc::new(AudioMixer::new(DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS));
 
     // Pick initial 4 random videos
     let selected = pick_random_videos(&all_videos, 4);
@@ -140,6 +141,14 @@ fn open_grid_with_folder(folder: PathBuf, cx: &mut App) {
         }
     };
 
+    // Register audio consumers with the mixer
+    for (i, player) in players.iter().enumerate() {
+        if let Some(audio_consumer) = player.audio_consumer() {
+            mixer.set_stream(i, Some(Arc::clone(audio_consumer)));
+            println!("  [{}] Audio stream registered", i);
+        }
+    }
+
     let players_array: [Arc<VideoPlayer>; 4] = match players.try_into() {
         Ok(arr) => arr,
         Err(_) => panic!("Should have exactly 4 players"),
@@ -156,6 +165,27 @@ fn open_grid_with_folder(folder: PathBuf, cx: &mut App) {
         cx,
     );
 
+    // Store audio output in a Box::leak to keep it alive for app lifetime
+    // (The Stream must not be dropped or audio stops)
+    let audio_output = match AudioOutput::new(Arc::clone(&mixer)) {
+        Ok(output) => {
+            eprintln!(
+                "Audio output initialized ({}Hz, {} channels)",
+                DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS
+            );
+            Some(Box::new(output))
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to initialize audio output: {}", e);
+            eprintln!("Video will play without audio");
+            None
+        }
+    };
+    // Leak the audio output to keep it alive - it will live for the entire app lifetime
+    if let Some(output) = audio_output {
+        Box::leak(output);
+    }
+
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -168,7 +198,7 @@ fn open_grid_with_folder(folder: PathBuf, cx: &mut App) {
             }),
             ..Default::default()
         },
-        |_, cx| cx.new(|cx| VideoGridView::new(players_array, all_videos, cx)),
+        |_, cx| cx.new(|cx| VideoGridView::new(players_array, all_videos, Arc::clone(&mixer), cx)),
     )
     .expect("Failed to open window");
 
