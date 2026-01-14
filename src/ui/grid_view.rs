@@ -85,11 +85,28 @@ impl VideoGridView {
     }
 
     /**
-        Create a new random video player from the available paths
+        Create a new random video player from the available paths,
+        excluding any videos currently playing in other slots.
     */
     fn create_replacement_player(&self) -> Option<VideoPlayer> {
         let mut rng = rand::thread_rng();
-        let path = self.all_video_paths.choose(&mut rng)?;
+
+        // Get paths of currently playing videos
+        let current_paths: Vec<_> = self.players.iter().map(|p| p.path()).collect();
+
+        // Filter to videos not currently playing
+        let available: Vec<_> = self
+            .all_video_paths
+            .iter()
+            .filter(|p| !current_paths.contains(&p.as_path()))
+            .collect();
+
+        // Pick from available videos, or fall back to all videos if not enough
+        let path = if available.is_empty() {
+            self.all_video_paths.choose(&mut rng)?
+        } else {
+            *available.choose(&mut rng)?
+        };
 
         match VideoPlayer::with_options(path, None, None) {
             Ok(player) => Some(player),
