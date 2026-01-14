@@ -17,10 +17,9 @@ use ffmpeg_next::{
     util::frame::video::Video as VideoFrameFFmpeg,
 };
 
-use super::frame::VideoFrame;
 use super::packet_queue::{Packet, PacketQueue};
-use super::queue::FrameQueue;
 use crate::audio::{AudioStreamProducer, DEFAULT_SAMPLE_RATE};
+use crate::playback::{FrameQueue, VideoFrame};
 
 /**
     Error type for video decoding operations

@@ -6,7 +6,7 @@ use gpui::{
     Window, fill, prelude::*,
 };
 
-use crate::video::VideoPlayer;
+use crate::playback::VideoPlayer;
 
 /**
     A video element that renders frames from a VideoPlayer

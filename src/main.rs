@@ -20,12 +20,13 @@ use rand::seq::SliceRandom;
 use walkdir::WalkDir;
 
 mod audio;
+mod decode;
+mod playback;
 mod ui;
-mod video;
 
 use audio::{AudioMixer, AudioOutput, DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
+use playback::VideoPlayer;
 use ui::VideoGridView;
-use video::VideoPlayer;
 
 // Supported video extensions
 const VIDEO_EXTENSIONS: &[&str] = &[

@@ -6,7 +6,7 @@ use gpui::{AsyncApp, Context, WeakEntity, Window, div, prelude::*, rgb};
 use rand::seq::SliceRandom;
 
 use crate::audio::AudioMixer;
-use crate::video::VideoPlayer;
+use crate::playback::VideoPlayer;
 
 use super::video_element::video_element;
 

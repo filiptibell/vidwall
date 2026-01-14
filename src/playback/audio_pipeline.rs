@@ -8,11 +8,10 @@ use std::thread::{self, JoinHandle};
 use crate::audio::{
     AudioStreamClock, AudioStreamConsumer, AudioStreamProducer, create_audio_stream,
 };
-
-use super::decoder::{
-    AudioStreamInfo, DecoderError, audio_demux, decode_audio_packets, get_audio_stream_info,
+use crate::decode::{
+    AudioStreamInfo, DecoderError, PacketQueue, audio_demux, decode_audio_packets,
+    get_audio_stream_info,
 };
-use super::packet_queue::PacketQueue;
 
 const AUDIO_PACKET_QUEUE_CAPACITY: usize = 240;
 

@@ -5,9 +5,11 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 
-use super::decoder::{DecoderError, decode_video_packets, get_video_stream_info, video_demux};
-use super::packet_queue::PacketQueue;
-use super::queue::FrameQueue;
+use crate::decode::{
+    DecoderError, PacketQueue, decode_video_packets, get_video_stream_info, video_demux,
+};
+
+use super::frame_queue::FrameQueue;
 
 const VIDEO_PACKET_QUEUE_CAPACITY: usize = 120;
 const VIDEO_FRAME_QUEUE_CAPACITY: usize = 60;

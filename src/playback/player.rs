@@ -8,11 +8,12 @@ use std::time::{Duration, Instant};
 use gpui::RenderImage;
 use image::{Frame, RgbaImage};
 
+use crate::audio::{AudioStreamClock, AudioStreamConsumer};
+use crate::decode::{DecoderError, get_video_info};
+
 use super::audio_pipeline::AudioPipeline;
-use super::decoder::{DecoderError, get_video_info};
 use super::frame::VideoFrame;
 use super::video_pipeline::VideoPipeline;
-use crate::audio::{AudioStreamClock, AudioStreamConsumer};
 
 /**
     Playback state
