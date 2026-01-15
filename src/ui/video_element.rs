@@ -35,7 +35,11 @@ impl VideoElement {
     /// returns the bounds at which to paint the image so that it
     /// fills the cell completely while maintaining aspect ratio.
     /// Overflow will be clipped by the parent's overflow_hidden.
+    ///
+    /// Values are rounded to avoid sub-pixel flickering at cell edges.
     fn calculate_fill_bounds(&self, cell_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        let cell_x: f32 = cell_bounds.origin.x.into();
+        let cell_y: f32 = cell_bounds.origin.y.into();
         let cell_width: f32 = cell_bounds.size.width.into();
         let cell_height: f32 = cell_bounds.size.height.into();
         let cell_aspect = cell_width / cell_height;
@@ -43,7 +47,17 @@ impl VideoElement {
 
         if (video_aspect - cell_aspect).abs() < 0.001 {
             // Aspect ratios match, no adjustment needed
-            return cell_bounds;
+            // Still round to pixel boundaries to avoid edge flickering
+            return Bounds {
+                origin: Point {
+                    x: px(cell_x.round()),
+                    y: px(cell_y.round()),
+                },
+                size: Size {
+                    width: px(cell_width.round()),
+                    height: px(cell_height.round()),
+                },
+            };
         }
 
         let (paint_width, paint_height) = if video_aspect > cell_aspect {
@@ -58,18 +72,18 @@ impl VideoElement {
             (width, height)
         };
 
-        // Center the image in the cell
+        // Center the image in the cell, rounding to pixel boundaries
         let x_offset = (cell_width - paint_width) / 2.0;
         let y_offset = (cell_height - paint_height) / 2.0;
 
         Bounds {
             origin: Point {
-                x: cell_bounds.origin.x + px(x_offset),
-                y: cell_bounds.origin.y + px(y_offset),
+                x: px((cell_x + x_offset).round()),
+                y: px((cell_y + y_offset).round()),
             },
             size: Size {
-                width: px(paint_width),
-                height: px(paint_height),
+                width: px(paint_width.round()),
+                height: px(paint_height.round()),
             },
         }
     }
