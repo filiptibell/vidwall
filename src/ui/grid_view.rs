@@ -258,6 +258,30 @@ impl GridView {
         cx.notify();
     }
 
+    /// Skip all videos and load new ones.
+    pub fn skip_all(&mut self, cx: &mut Context<Self>) {
+        if self.slots.is_empty() {
+            return;
+        }
+
+        // Clear audio streams
+        let app_state = cx.global::<AppState>();
+        let mixer = Arc::clone(&app_state.mixer);
+        for index in 0..self.slots.len() {
+            mixer.set_stream(index, None);
+        }
+
+        // Clear all slots
+        self.slots.clear();
+        cx.update_global::<AppState, _>(|state, _cx| {
+            state.truncate_players(0);
+        });
+
+        // Refill with new videos
+        self.fill_empty_slots(cx);
+        cx.notify();
+    }
+
     /// Pause all videos in the grid.
     pub fn pause_all(&self, cx: &Context<Self>) {
         for slot in &self.slots {

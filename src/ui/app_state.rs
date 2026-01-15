@@ -23,6 +23,8 @@ pub struct AppState {
     pub master_muted: bool,
     /// Whether all videos are paused
     pub paused: bool,
+    /// Flag to request skipping all videos (set by action, consumed by grid)
+    pub skip_all_requested: bool,
 }
 
 impl Global for AppState {}
@@ -37,7 +39,21 @@ impl AppState {
             master_volume: 1.0,
             master_muted: false,
             paused: false,
+            skip_all_requested: false,
         }
+    }
+
+    /// Request skipping all videos (will be handled by the grid view).
+    pub fn request_skip_all(&mut self) {
+        self.skip_all_requested = true;
+    }
+
+    /// Check and consume the skip all request.
+    /// Returns true if skip was requested.
+    pub fn take_skip_all_request(&mut self) -> bool {
+        let was_requested = self.skip_all_requested;
+        self.skip_all_requested = false;
+        was_requested
     }
 
     /// Toggle pause state for all videos.

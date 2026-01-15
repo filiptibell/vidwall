@@ -160,6 +160,7 @@ fn open_app_with_paths(paths: Vec<PathBuf>, cx: &mut App) {
     println!("  M      - Mute/Unmute");
     println!("  Up     - Volume up");
     println!("  Down   - Volume down");
+    println!("  Enter  - Skip all videos");
     println!("  Cmd+Q  - Quit");
 
     // Start video scanning in the background

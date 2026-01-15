@@ -10,6 +10,7 @@ use gpui::{
 use crate::video::ReadyVideos;
 use crate::window_state::WindowState;
 
+use super::app_state::AppState;
 use super::grid_config::GridConfig;
 use super::grid_view::GridView;
 
@@ -147,6 +148,15 @@ impl Render for RootView {
         // Check if size changed (for grid reconfiguration)
         if self.last_size != Some(size) {
             self.handle_resize(size, cx);
+        }
+
+        // Check if skip all was requested
+        let skip_requested =
+            cx.update_global::<AppState, _>(|state, _cx| state.take_skip_all_request());
+        if skip_requested {
+            self.grid.update(cx, |grid, cx| {
+                grid.skip_all(cx);
+            });
         }
 
         // Save window state (display + origin + content size)
