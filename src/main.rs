@@ -113,14 +113,20 @@ fn open_app_with_paths(paths: Vec<PathBuf>, cx: &mut App) {
         format!("Video Grid - {} sources", paths.len())
     };
 
-    // Try to load saved window size, or use defaults
-    let window_size = if let Some(saved_state) = WindowState::load() {
-        println!("Restored window size from saved state");
-        saved_state.to_size()
+    // Try to load saved window state, or use defaults
+    let (bounds, display_id) = if let Some(saved_state) = WindowState::load() {
+        println!("Restored window state from saved state");
+        let display_id = saved_state.display_id(cx);
+        let bounds = saved_state.to_bounds(cx);
+        (bounds, display_id)
     } else {
-        size(px(DEFAULT_WIDTH as f32), px(DEFAULT_HEIGHT as f32))
+        let bounds = Bounds::centered(
+            None,
+            size(px(DEFAULT_WIDTH as f32), px(DEFAULT_HEIGHT as f32)),
+            cx,
+        );
+        (bounds, None)
     };
-    let bounds = Bounds::centered(None, window_size, cx);
 
     // Open window with empty grid (will be filled as videos are validated)
     let ready_videos_for_window = Arc::clone(&ready_videos);
@@ -128,6 +134,7 @@ fn open_app_with_paths(paths: Vec<PathBuf>, cx: &mut App) {
         .open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                display_id,
                 focus: true,
                 kind: gpui::WindowKind::PopUp,
                 titlebar: Some(gpui::TitlebarOptions {

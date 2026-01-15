@@ -1,7 +1,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use gpui::{Context, Entity, IntoElement, Pixels, Render, Size, Window, div, prelude::*, rgb};
+use std::rc::Rc;
+
+use gpui::{
+    Context, Entity, IntoElement, Pixels, PlatformDisplay, Point, Render, Size, Window, div,
+    prelude::*, rgb,
+};
 
 use crate::video::ReadyVideos;
 use crate::window_state::WindowState;
@@ -19,6 +24,7 @@ pub struct RootView {
     grid: Entity<GridView>,
     ready_videos: Arc<ReadyVideos>,
     last_size: Option<Size<Pixels>>,
+    last_origin: Option<Point<Pixels>>,
     last_save_time: Option<Instant>,
 }
 
@@ -32,6 +38,7 @@ impl RootView {
             grid,
             ready_videos,
             last_size: None,
+            last_origin: None,
             last_save_time: None,
         }
     }
@@ -52,12 +59,22 @@ impl RootView {
         });
     }
 
-    /// Save window size to disk (debounced).
-    fn maybe_save_window_size(&mut self, size: Size<Pixels>) {
-        // Check if size actually changed
-        if self.last_size == Some(size) {
+    /// Save window state to disk (debounced).
+    ///
+    /// Uses window origin from bounds() but content size from viewport_size()
+    /// to avoid the title bar height being added on each restore.
+    fn maybe_save_window_state(
+        &mut self,
+        display: Option<Rc<dyn PlatformDisplay>>,
+        origin: Point<Pixels>,
+        size: Size<Pixels>,
+    ) {
+        // Check if state actually changed
+        if self.last_size == Some(size) && self.last_origin == Some(origin) {
             return;
         }
+        self.last_size = Some(size);
+        self.last_origin = Some(origin);
 
         // Debounce saves
         let now = Instant::now();
@@ -67,8 +84,8 @@ impl RootView {
             }
         }
 
-        // Save the state
-        let state = WindowState::from_size(size);
+        // Save the state (display UUID, origin, and content size)
+        let state = WindowState::new(display, origin, size);
         if let Err(e) = state.save() {
             eprintln!("Failed to save window state: {}", e);
         }
@@ -85,15 +102,18 @@ impl RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Get current window size (viewport, not including decorations)
+        // Get current content size, window origin, and display
         let size = window.viewport_size();
+        let origin = window.bounds().origin;
+        let display = window.display(&*cx);
 
-        // Check if size changed
+        // Check if size changed (for grid reconfiguration)
         if self.last_size != Some(size) {
             self.handle_resize(size, cx);
-            self.maybe_save_window_size(size);
-            self.last_size = Some(size);
         }
+
+        // Save window state (display + origin + content size)
+        self.maybe_save_window_state(display, origin, size);
 
         div()
             .id("root")
