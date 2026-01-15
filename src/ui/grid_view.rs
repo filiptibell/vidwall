@@ -1,42 +1,144 @@
 use std::sync::Arc;
 
 use gpui::{Context, Entity, IntoElement, Render, Window, div, prelude::*, rgb};
-use rand::seq::SliceRandom;
 
 use crate::playback::VideoPlayer;
+use crate::video::ReadyVideos;
 
 use super::app_state::AppState;
+use super::grid_config::GridConfig;
 use super::video_element::video_element;
 use super::video_slot::{VideoEnded, VideoSlot};
 
-/// The main grid view that displays 4 videos in a 2x2 layout.
+/// The main grid view that displays videos in a dynamic grid layout.
 ///
 /// Uses VideoSlot entities for each video position and subscribes to their
 /// VideoEnded events for automatic video replacement.
 pub struct GridView {
-    slots: [Entity<VideoSlot>; 4],
+    slots: Vec<Entity<VideoSlot>>,
+    config: GridConfig,
+    ready_videos: Arc<ReadyVideos>,
 }
 
 impl GridView {
-    /// Create a new grid view with the given initial players.
-    pub fn new(players: [Arc<VideoPlayer>; 4], cx: &mut Context<Self>) -> Self {
-        // Create VideoSlot entities for each player
-        let slots: [Entity<VideoSlot>; 4] = players
-            .into_iter()
-            .enumerate()
-            .map(|(index, player)| {
-                let slot = cx.new(|cx| VideoSlot::new(player, index, cx));
+    /// Create a new empty grid view that will pull videos from the given storage.
+    pub fn new(ready_videos: Arc<ReadyVideos>, cx: &mut Context<Self>) -> Self {
+        Self {
+            slots: Vec::new(),
+            config: GridConfig::default(),
+            ready_videos,
+        }
+    }
 
-                // Subscribe to VideoEnded events from this slot
-                cx.subscribe(&slot, Self::on_video_ended).detach();
+    /// Get the current grid configuration.
+    pub fn config(&self) -> GridConfig {
+        self.config
+    }
 
-                slot
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("Should have exactly 4 slots");
+    /// Reconfigure the grid to the new configuration.
+    ///
+    /// This will add or remove slots as needed. If slots are added,
+    /// they will be filled with videos from the ready pool.
+    pub fn reconfigure(&mut self, new_config: GridConfig, cx: &mut Context<Self>) {
+        if new_config == self.config && !self.slots.is_empty() {
+            return; // No change needed
+        }
 
-        Self { slots }
+        let old_count = self.slots.len();
+        let new_count = new_config.total_slots() as usize;
+
+        if new_count > old_count {
+            // Add new slots
+            for index in old_count..new_count {
+                if let Some(slot) = self.create_slot(index, cx) {
+                    self.slots.push(slot);
+                }
+            }
+        } else if new_count < old_count {
+            // Remove excess slots
+            let app_state = cx.global::<AppState>();
+            let mixer = Arc::clone(&app_state.mixer);
+
+            for index in new_count..old_count {
+                // Clear audio stream for this slot
+                mixer.set_stream(index, None);
+            }
+
+            // Remove slots and update AppState
+            self.slots.truncate(new_count);
+            cx.update_global::<AppState, _>(|state, _cx| {
+                state.truncate_players(new_count);
+            });
+        }
+
+        self.config = new_config;
+        cx.notify();
+    }
+
+    /// Try to fill any empty slots with videos from the ready pool.
+    pub fn fill_empty_slots(&mut self, cx: &mut Context<Self>) {
+        let target_count = self.config.total_slots() as usize;
+
+        // First, ensure we have enough slot entities
+        while self.slots.len() < target_count {
+            if let Some(slot) = self.create_slot(self.slots.len(), cx) {
+                self.slots.push(slot);
+            } else {
+                break; // No more videos available
+            }
+        }
+
+        cx.notify();
+    }
+
+    /// Create a new slot at the given index with a video from the ready pool.
+    fn create_slot(&self, index: usize, cx: &mut Context<Self>) -> Option<Entity<VideoSlot>> {
+        // Get paths of currently playing videos
+        let current_paths: Vec<_> = self
+            .slots
+            .iter()
+            .map(|slot| slot.read(cx).video_info().path.clone())
+            .collect();
+
+        // Pick a video not currently playing
+        let video_info = self.ready_videos.pick_random_except(&current_paths)?;
+
+        // Create the player
+        let player = match VideoPlayer::with_options(&video_info.path, None, None) {
+            Ok(p) => Arc::new(p),
+            Err(e) => {
+                eprintln!("Failed to create player: {}", e);
+                return None;
+            }
+        };
+
+        println!(
+            "Slot {}: {}",
+            index,
+            video_info
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
+
+        // Set up audio
+        let app_state = cx.global::<AppState>();
+        let mixer = Arc::clone(&app_state.mixer);
+        if let Some(audio_consumer) = player.audio_consumer() {
+            mixer.set_stream(index, Some(audio_consumer));
+        }
+
+        // Update AppState with the new player
+        cx.update_global::<AppState, _>(|state, _cx| {
+            state.set_player(index, Arc::clone(&player));
+        });
+
+        // Create the slot entity
+        let slot = cx.new(|cx| VideoSlot::new(player, video_info, index, cx));
+        cx.subscribe(&slot, Self::on_video_ended).detach();
+
+        Some(slot)
     }
 
     /// Handle VideoEnded event from a slot - replace the video.
@@ -52,10 +154,9 @@ impl GridView {
 
     /// Replace the video at the given slot index with a new random video.
     fn replace_video(&mut self, index: usize, cx: &mut Context<Self>) {
-        // Get paths and mixer from global state
-        let app_state = cx.global::<AppState>();
-        let video_paths = app_state.video_paths.clone();
-        let mixer = Arc::clone(&app_state.mixer);
+        if index >= self.slots.len() {
+            return;
+        }
 
         // Get paths of currently playing videos (excluding the one being replaced)
         let current_paths: Vec<_> = self
@@ -63,30 +164,20 @@ impl GridView {
             .iter()
             .enumerate()
             .filter(|(i, _)| *i != index)
-            .map(|(_, slot)| slot.read(cx).player().path().to_path_buf())
+            .map(|(_, slot)| slot.read(cx).video_info().path.clone())
             .collect();
 
-        // Pick a random video that's not currently playing
-        let mut rng = rand::thread_rng();
-        let available: Vec<_> = video_paths
-            .iter()
-            .filter(|p| !current_paths.iter().any(|cp| cp == *p))
-            .collect();
-
-        let path = if available.is_empty() {
-            match video_paths.choose(&mut rng) {
-                Some(p) => p,
-                None => return, // No videos available
-            }
-        } else {
-            *available.choose(&mut rng).unwrap()
+        // Pick a video not currently playing
+        let video_info = match self.ready_videos.pick_random_except(&current_paths) {
+            Some(info) => info,
+            None => return, // No videos available
         };
 
         // Create new player
-        let new_player = match VideoPlayer::with_options(path, None, None) {
+        let new_player = match VideoPlayer::with_options(&video_info.path, None, None) {
             Ok(player) => Arc::new(player),
             Err(e) => {
-                eprintln!("Failed to create player for {:?}: {}", path, e);
+                eprintln!("Failed to create player for {:?}: {}", video_info.path, e);
                 return;
             }
         };
@@ -94,28 +185,32 @@ impl GridView {
         println!(
             "Slot {}: replaced with {}",
             index,
-            path.file_name().unwrap_or_default().to_string_lossy()
+            video_info
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
         );
 
         // Update mixer with new audio consumer
+        let app_state = cx.global::<AppState>();
+        let mixer = Arc::clone(&app_state.mixer);
         mixer.set_stream(index, None); // Remove old stream
         if let Some(audio_consumer) = new_player.audio_consumer() {
             mixer.set_stream(index, Some(audio_consumer));
         }
 
-        // Update the player in AppState so pause/resume works
+        // Update the player in AppState
         cx.update_global::<AppState, _>(|state, _cx| {
             state.set_player(index, Arc::clone(&new_player));
         });
 
         // Create new slot entity and subscribe to its events
-        let new_slot = cx.new(|cx| VideoSlot::new(new_player, index, cx));
+        let new_slot = cx.new(|cx| VideoSlot::new(new_player, video_info, index, cx));
         cx.subscribe(&new_slot, Self::on_video_ended).detach();
 
         // Replace the slot
         self.slots[index] = new_slot;
-
-        // Notify that the view needs to re-render
         cx.notify();
     }
 
@@ -135,35 +230,60 @@ impl GridView {
 
     /// Render a single slot at the given index.
     fn render_slot(&self, index: usize, cx: &Context<Self>) -> impl IntoElement {
-        let player = self.slots[index].read(cx).player().clone();
+        let slot = &self.slots[index];
+        let slot_data = slot.read(cx);
+        let player = slot_data.player().clone();
+        let aspect_ratio = slot_data.video_info().aspect_ratio();
         let id = ("video", index);
+
         div()
             .flex_1()
             .overflow_hidden()
-            .child(video_element(player, id))
+            .child(video_element(player, aspect_ratio, id))
     }
 }
 
 impl Render for GridView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Try to fill empty slots if videos are available
+        let target_slots = self.config.total_slots() as usize;
+        if self.slots.len() < target_slots && !self.ready_videos.is_empty() {
+            self.fill_empty_slots(cx);
+        }
+
+        let cols = self.config.cols as usize;
+        let rows = self.config.rows as usize;
+
+        // Build rows of video slots
+        let mut row_elements: Vec<_> = Vec::new();
+
+        for row in 0..rows {
+            let mut col_elements: Vec<_> = Vec::new();
+            for col in 0..cols {
+                let index = row * cols + col;
+                if index < self.slots.len() {
+                    col_elements.push(self.render_slot(index, cx).into_any_element());
+                } else {
+                    // Empty slot placeholder (black)
+                    col_elements.push(div().flex_1().bg(rgb(0x000000)).into_any_element());
+                }
+            }
+
+            row_elements.push(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_row()
+                    .children(col_elements)
+                    .into_any_element(),
+            );
+        }
+
         div()
             .size_full()
             .bg(rgb(0x000000))
             .flex()
             .flex_col()
-            .children([
-                // Top row
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_row()
-                    .children([self.render_slot(0, cx), self.render_slot(1, cx)]),
-                // Bottom row
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_row()
-                    .children([self.render_slot(2, cx), self.render_slot(3, cx)]),
-            ])
+            .children(row_elements)
     }
 }

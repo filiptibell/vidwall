@@ -1,21 +1,21 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::Global;
 
 use crate::audio::AudioMixer;
 use crate::playback::VideoPlayer;
+use crate::video::ReadyVideos;
 
 /// Global application state shared across all views.
 ///
 /// This is a GPUI Global - a singleton that can be accessed from any context.
 /// It holds shared state that multiple parts of the app need to access.
 pub struct AppState {
-    /// All video file paths discovered in the folder
-    pub video_paths: Vec<PathBuf>,
+    /// Thread-safe storage for validated video files
+    pub ready_videos: Arc<ReadyVideos>,
     /// Audio mixer for combining all video streams
     pub mixer: Arc<AudioMixer>,
-    /// Current video players (updated when videos are replaced)
+    /// Current video players (dynamic length based on grid configuration)
     pub players: Vec<Arc<VideoPlayer>>,
     /// Master volume level (0.0 to 1.0)
     pub master_volume: f32,
@@ -28,16 +28,12 @@ pub struct AppState {
 impl Global for AppState {}
 
 impl AppState {
-    /// Create a new AppState with the given video paths and mixer.
-    pub fn new(
-        video_paths: Vec<PathBuf>,
-        mixer: Arc<AudioMixer>,
-        players: Vec<Arc<VideoPlayer>>,
-    ) -> Self {
+    /// Create a new AppState with the given ready videos storage and mixer.
+    pub fn new(ready_videos: Arc<ReadyVideos>, mixer: Arc<AudioMixer>) -> Self {
         Self {
-            video_paths,
+            ready_videos,
             mixer,
-            players,
+            players: Vec::new(),
             master_volume: 1.0,
             master_muted: false,
             paused: false,
@@ -88,10 +84,25 @@ impl AppState {
         self.mixer.set_master_volume(self.master_volume);
     }
 
-    /// Update a player at the given index (called when a video is replaced).
+    /// Set or add a player at the given index.
+    /// Automatically grows the players vector if needed.
     pub fn set_player(&mut self, index: usize, player: Arc<VideoPlayer>) {
-        if index < self.players.len() {
-            self.players[index] = player;
+        // Grow vector if needed
+        while self.players.len() <= index {
+            // This is a placeholder - will be replaced immediately
+            self.players.push(Arc::clone(&player));
         }
+        self.players[index] = player;
+    }
+
+    /// Truncate the players list to the given length.
+    /// Used when the grid shrinks.
+    pub fn truncate_players(&mut self, len: usize) {
+        self.players.truncate(len);
+    }
+
+    /// Get the number of active players.
+    pub fn player_count(&self) -> usize {
+        self.players.len()
     }
 }

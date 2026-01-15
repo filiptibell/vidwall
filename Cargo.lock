@@ -6003,6 +6003,8 @@ dependencies = [
  "parking_lot",
  "rand 0.8.5",
  "ringbuf",
+ "serde",
+ "serde_json",
  "walkdir",
 ]
 

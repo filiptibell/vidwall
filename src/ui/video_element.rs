@@ -2,25 +2,75 @@ use std::panic::Location;
 use std::sync::Arc;
 
 use gpui::{
-    Bounds, Corners, ElementId, GlobalElementId, InspectorElementId, LayoutId, Pixels, RenderImage,
-    Window, fill, prelude::*,
+    Bounds, Corners, ElementId, GlobalElementId, InspectorElementId, LayoutId, Pixels, Point,
+    RenderImage, Size, Window, fill, prelude::*, px,
 };
 
 use crate::playback::VideoPlayer;
 
-/**
-    A video element that renders frames from a VideoPlayer
-*/
+/// A video element that renders frames from a VideoPlayer with crop-to-fill scaling.
 pub struct VideoElement {
     player: Arc<VideoPlayer>,
+    /// The original aspect ratio of the video (width / height)
+    video_aspect_ratio: f32,
     id: ElementId,
 }
 
 impl VideoElement {
-    pub fn new(player: Arc<VideoPlayer>, id: impl Into<ElementId>) -> Self {
+    pub fn new(
+        player: Arc<VideoPlayer>,
+        video_aspect_ratio: f32,
+        id: impl Into<ElementId>,
+    ) -> Self {
         Self {
             player,
+            video_aspect_ratio,
             id: id.into(),
+        }
+    }
+
+    /// Calculate bounds for crop-to-fill scaling.
+    ///
+    /// Given the video's aspect ratio and the cell bounds,
+    /// returns the bounds at which to paint the image so that it
+    /// fills the cell completely while maintaining aspect ratio.
+    /// Overflow will be clipped by the parent's overflow_hidden.
+    fn calculate_fill_bounds(&self, cell_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        let cell_width: f32 = cell_bounds.size.width.into();
+        let cell_height: f32 = cell_bounds.size.height.into();
+        let cell_aspect = cell_width / cell_height;
+        let video_aspect = self.video_aspect_ratio;
+
+        if (video_aspect - cell_aspect).abs() < 0.001 {
+            // Aspect ratios match, no adjustment needed
+            return cell_bounds;
+        }
+
+        let (paint_width, paint_height) = if video_aspect > cell_aspect {
+            // Video is wider than cell - expand width to fill, crop sides
+            let height = cell_height;
+            let width = height * video_aspect;
+            (width, height)
+        } else {
+            // Video is taller than cell - expand height to fill, crop top/bottom
+            let width = cell_width;
+            let height = width / video_aspect;
+            (width, height)
+        };
+
+        // Center the image in the cell
+        let x_offset = (cell_width - paint_width) / 2.0;
+        let y_offset = (cell_height - paint_height) / 2.0;
+
+        Bounds {
+            origin: Point {
+                x: cell_bounds.origin.x + px(x_offset),
+                y: cell_bounds.origin.y + px(y_offset),
+            },
+            size: Size {
+                width: px(paint_width),
+                height: px(paint_height),
+            },
         }
     }
 }
@@ -35,9 +85,7 @@ impl IntoElement for VideoElement {
 
 impl Element for VideoElement {
     type RequestLayoutState = ();
-    /**
-        (current_image, old_image_to_drop)
-    */
+    /// (current_image, old_image_to_drop)
     type PrepaintState = (Option<Arc<RenderImage>>, Option<Arc<RenderImage>>);
 
     fn id(&self) -> Option<ElementId> {
@@ -97,9 +145,12 @@ impl Element for VideoElement {
         }
 
         if let Some(render_image) = current_image {
+            // Calculate fill bounds (may extend beyond cell, will be clipped by overflow_hidden)
+            let fill_bounds = self.calculate_fill_bounds(bounds);
+
             // Paint the image scaled to fill bounds
             let _ = window.paint_image(
-                bounds,
+                fill_bounds,
                 Corners::default(),
                 render_image,
                 0,     // frame index
@@ -115,9 +166,11 @@ impl Element for VideoElement {
     }
 }
 
-/**
-    Helper function to create a video element
-*/
-pub fn video_element(player: Arc<VideoPlayer>, id: impl Into<ElementId>) -> VideoElement {
-    VideoElement::new(player, id)
+/// Helper function to create a video element
+pub fn video_element(
+    player: Arc<VideoPlayer>,
+    video_aspect_ratio: f32,
+    id: impl Into<ElementId>,
+) -> VideoElement {
+    VideoElement::new(player, video_aspect_ratio, id)
 }

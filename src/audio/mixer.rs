@@ -5,8 +5,8 @@ use parking_lot::RwLock;
 
 use super::stream::{AtomicF32, AudioStreamConsumer};
 
-/// Number of audio streams the mixer supports (one per video in the grid)
-pub const MIXER_STREAM_COUNT: usize = 4;
+/// Maximum number of audio streams the mixer supports
+pub const MIXER_MAX_STREAMS: usize = 4;
 
 /// Pre-allocated buffer size for mixing
 const MIX_BUFFER_SIZE: usize = 4096;
@@ -18,7 +18,7 @@ const MIX_BUFFER_SIZE: usize = 4096;
     Designed for real-time audio: uses RwLock with try_read to avoid blocking.
 */
 pub struct AudioMixer {
-    streams: RwLock<[Option<Arc<AudioStreamConsumer>>; MIXER_STREAM_COUNT]>,
+    streams: RwLock<Vec<Option<Arc<AudioStreamConsumer>>>>,
     master_volume: AtomicF32,
     master_muted: AtomicBool,
     sample_rate: u32,
@@ -28,7 +28,7 @@ pub struct AudioMixer {
 impl AudioMixer {
     pub fn new(sample_rate: u32, channels: u16) -> Self {
         Self {
-            streams: RwLock::new([None, None, None, None]),
+            streams: RwLock::new(Vec::new()),
             master_volume: AtomicF32::new(1.0),
             master_muted: AtomicBool::new(false),
             sample_rate,
@@ -79,22 +79,35 @@ impl AudioMixer {
         self.master_muted.load(Ordering::Relaxed)
     }
 
-    /// Set a stream at the given index (0-3). Uses write lock.
+    /// Set a stream at the given index. Uses write lock.
+    /// Automatically grows the streams vector if needed.
     pub fn set_stream(&self, index: usize, stream: Option<Arc<AudioStreamConsumer>>) {
-        if index < MIXER_STREAM_COUNT {
-            let mut streams = self.streams.write();
-            streams[index] = stream;
+        if index >= MIXER_MAX_STREAMS {
+            return;
         }
+        let mut streams = self.streams.write();
+        // Grow vector if needed
+        while streams.len() <= index {
+            streams.push(None);
+        }
+        streams[index] = stream;
     }
 
     /// Get a clone of a stream at the given index
     pub fn stream(&self, index: usize) -> Option<Arc<AudioStreamConsumer>> {
-        if index < MIXER_STREAM_COUNT {
-            let streams = self.streams.read();
-            streams[index].clone()
-        } else {
-            None
-        }
+        let streams = self.streams.read();
+        streams.get(index).cloned().flatten()
+    }
+
+    /// Clear all streams (used when reconfiguring the grid)
+    pub fn clear_streams(&self) {
+        let mut streams = self.streams.write();
+        streams.clear();
+    }
+
+    /// Get the current number of stream slots
+    pub fn stream_count(&self) -> usize {
+        self.streams.read().len()
     }
 
     /**
