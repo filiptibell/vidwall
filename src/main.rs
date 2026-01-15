@@ -32,10 +32,12 @@ mod decode;
 mod playback;
 mod ui;
 mod video;
+mod window_state;
 
 use audio::{AudioMixer, AudioOutput, DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 use ui::{AppState, RootView, register_shortcuts};
 use video::{ReadyVideos, VideoScanner};
+use window_state::WindowState;
 
 // Default window dimensions
 const DEFAULT_WIDTH: u32 = 1280;
@@ -111,11 +113,14 @@ fn open_app_with_paths(paths: Vec<PathBuf>, cx: &mut App) {
         format!("Video Grid - {} sources", paths.len())
     };
 
-    let bounds = Bounds::centered(
-        None,
-        size(px(DEFAULT_WIDTH as f32), px(DEFAULT_HEIGHT as f32)),
-        cx,
-    );
+    // Try to load saved window size, or use defaults
+    let window_size = if let Some(saved_state) = WindowState::load() {
+        println!("Restored window size from saved state");
+        saved_state.to_size()
+    } else {
+        size(px(DEFAULT_WIDTH as f32), px(DEFAULT_HEIGHT as f32))
+    };
+    let bounds = Bounds::centered(None, window_size, cx);
 
     // Open window with empty grid (will be filled as videos are validated)
     let ready_videos_for_window = Arc::clone(&ready_videos);
@@ -132,9 +137,14 @@ fn open_app_with_paths(paths: Vec<PathBuf>, cx: &mut App) {
                 }),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| RootView::new(ready_videos_for_window, cx)),
+            |_window, cx| cx.new(|cx| RootView::new(ready_videos_for_window, cx)),
         )
         .expect("Failed to open window");
+
+    // Save window bounds when closed
+    // We need to save the bounds before the window is destroyed, so we do it via
+    // observing window bounds changes in RootView instead
+    let _ = window;
 
     cx.activate(true);
 
