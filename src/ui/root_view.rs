@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ use crate::window_state::WindowState;
 use super::app_state::AppState;
 use super::grid_config::GridConfig;
 use super::grid_view::GridView;
+use super::welcome_view::{VideosSelected, WelcomeView};
 
 /// Minimum time between window state saves (to avoid excessive disk writes during resize)
 const SAVE_DEBOUNCE_SECS: f32 = 1.0;
@@ -20,26 +22,127 @@ const SAVE_DEBOUNCE_SECS: f32 = 1.0;
 /// How often to check for new videos (in milliseconds)
 const VIDEO_POLL_INTERVAL_MS: u64 = 100;
 
+/// The current view state of the application.
+enum ViewState {
+    /// Welcome screen - waiting for user to select videos.
+    Welcome(Entity<WelcomeView>),
+    /// Grid view - playing videos.
+    Grid {
+        grid: Entity<GridView>,
+        ready_videos: Arc<ReadyVideos>,
+        last_video_count: usize,
+    },
+}
+
 /// The root view of the application.
 ///
-/// Contains the video grid and handles window resize events to reconfigure the grid.
+/// Contains either a welcome screen or the video grid, and handles window resize events.
 pub struct RootView {
-    grid: Entity<GridView>,
-    ready_videos: Arc<ReadyVideos>,
+    state: ViewState,
     last_size: Option<Size<Pixels>>,
     last_origin: Option<Point<Pixels>>,
     last_save_time: Option<Instant>,
-    last_video_count: usize,
 }
 
 impl RootView {
-    /// Create a new root view with the given ready videos storage.
-    pub fn new(ready_videos: Arc<ReadyVideos>, cx: &mut Context<Self>) -> Self {
+    /// Create a new root view with the welcome screen (no videos yet).
+    pub fn new_welcome(cx: &mut Context<Self>) -> Self {
+        let welcome = cx.new(|_cx| WelcomeView::new());
+
+        // Subscribe to VideosSelected events from the welcome view
+        cx.subscribe(&welcome, Self::on_videos_selected).detach();
+
+        Self {
+            state: ViewState::Welcome(welcome),
+            last_size: None,
+            last_origin: None,
+            last_save_time: None,
+        }
+    }
+
+    /// Create a new root view directly with videos (for CLI paths).
+    pub fn new_with_videos(ready_videos: Arc<ReadyVideos>, cx: &mut Context<Self>) -> Self {
         let ready_videos_clone = Arc::clone(&ready_videos);
         let grid = cx.new(|cx| GridView::new(ready_videos_clone, cx));
 
         // Start polling for new videos
-        cx.spawn(async move |this, mut cx| {
+        Self::start_video_polling(cx);
+
+        Self {
+            state: ViewState::Grid {
+                grid,
+                ready_videos,
+                last_video_count: 0,
+            },
+            last_size: None,
+            last_origin: None,
+            last_save_time: None,
+        }
+    }
+
+    /// Handle VideosSelected event from the welcome view.
+    fn on_videos_selected(
+        &mut self,
+        _welcome: Entity<WelcomeView>,
+        event: &VideosSelected,
+        cx: &mut Context<Self>,
+    ) {
+        self.transition_to_grid(event.paths.clone(), cx);
+    }
+
+    /// Transition from welcome screen to grid view after paths are selected.
+    fn transition_to_grid(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // Initialize video playback system (deref Context to App)
+        let ready_videos = crate::initialize_video_playback(paths.clone(), &mut **cx);
+
+        // Update window title - we'll do this in render when we have window access
+        let window_title = if paths.len() == 1 {
+            paths[0]
+                .file_name()
+                .map(|s| format!("Video Wall - {}", s.to_string_lossy()))
+                .unwrap_or_else(|| "Video Wall".to_string())
+        } else {
+            format!("Video Wall - {} sources", paths.len())
+        };
+
+        // Create grid view
+        let ready_videos_clone = Arc::clone(&ready_videos);
+        let grid = cx.new(|cx| GridView::new(ready_videos_clone, cx));
+
+        // Start polling for new videos
+        Self::start_video_polling(cx);
+
+        // Switch state - store the title for updating in render
+        self.state = ViewState::Grid {
+            grid,
+            ready_videos,
+            last_video_count: 0,
+        };
+
+        // Store title to set on next render
+        cx.spawn({
+            let title = window_title;
+            async move |_this, cx| {
+                cx.update(|cx| {
+                    if let Some(window) = cx.active_window() {
+                        window
+                            .update(cx, |_, window, _cx| {
+                                window.set_window_title(&title);
+                            })
+                            .ok();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+
+        cx.notify();
+    }
+
+    /// Start the background polling task for new videos.
+    fn start_video_polling(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
             loop {
                 Timer::after(Duration::from_millis(VIDEO_POLL_INTERVAL_MS)).await;
                 let should_stop = cx
@@ -54,53 +157,49 @@ impl RootView {
             }
         })
         .detach();
-
-        Self {
-            grid,
-            ready_videos,
-            last_size: None,
-            last_origin: None,
-            last_save_time: None,
-            last_video_count: 0,
-        }
     }
 
     /// Check if new videos have been added and fill empty slots.
     /// Returns true if polling should stop (grid is full).
     fn check_for_new_videos(&mut self, cx: &mut Context<Self>) -> bool {
-        let current_count = self.ready_videos.len();
-        if current_count > self.last_video_count {
-            self.last_video_count = current_count;
-            self.grid.update(cx, |grid, cx| {
+        let ViewState::Grid {
+            grid,
+            ready_videos,
+            last_video_count,
+        } = &mut self.state
+        else {
+            return true; // Stop polling if not in grid state
+        };
+
+        let current_count = ready_videos.len();
+        if current_count > *last_video_count {
+            *last_video_count = current_count;
+            grid.update(cx, |grid, cx| {
                 grid.fill_empty_slots(cx);
             });
         }
 
         // Stop polling once we have enough videos to fill the grid
-        let grid_slots = self.grid.read(cx).config().total_slots() as usize;
+        let grid_slots = grid.read(cx).config().total_slots() as usize;
         current_count >= grid_slots && grid_slots > 0
     }
 
-    /// Get the grid view entity.
-    pub fn grid(&self) -> &Entity<GridView> {
-        &self.grid
-    }
-
     /// Handle window resize by reconfiguring the grid if needed.
-    fn handle_resize(&mut self, size: Size<Pixels>, cx: &mut Context<Self>) {
+    fn handle_resize(&self, size: Size<Pixels>, cx: &mut Context<Self>) {
+        let ViewState::Grid { grid, .. } = &self.state else {
+            return;
+        };
+
         // Calculate optimal grid for new size
         let new_config = GridConfig::optimal_for_window(size.width.into(), size.height.into());
 
         // Reconfigure grid if needed
-        self.grid.update(cx, |grid, cx| {
+        grid.update(cx, |grid, cx| {
             grid.reconfigure(new_config, cx);
         });
     }
 
     /// Save window state to disk (debounced).
-    ///
-    /// Uses window origin from bounds() but content size from viewport_size()
-    /// to avoid the title bar height being added on each restore.
     fn maybe_save_window_state(
         &mut self,
         display: Option<Rc<dyn PlatformDisplay>>,
@@ -122,50 +221,55 @@ impl RootView {
             }
         }
 
-        // Save the state (display UUID, origin, and content size)
+        // Save the state
         let state = WindowState::new(display, origin, size);
         if let Err(e) = state.save() {
             eprintln!("Failed to save window state: {}", e);
         }
         self.last_save_time = Some(now);
     }
-
-    /// Try to fill the grid with videos (called when videos become available).
-    pub fn try_fill_grid(&mut self, cx: &mut Context<Self>) {
-        self.grid.update(cx, |grid, cx| {
-            grid.fill_empty_slots(cx);
-        });
-    }
 }
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Get current content size, window origin, and display
+        // Get current window info for state saving
         let size = window.viewport_size();
         let origin = window.bounds().origin;
         let display = window.display(&*cx);
 
-        // Check if size changed (for grid reconfiguration)
-        if self.last_size != Some(size) {
-            self.handle_resize(size, cx);
-        }
+        // Check if size changed (before updating last_size in save)
+        let size_changed = self.last_size != Some(size);
 
-        // Check if skip all was requested
-        let skip_requested =
-            cx.update_global::<AppState, _>(|state, _cx| state.take_skip_all_request());
-        if skip_requested {
-            self.grid.update(cx, |grid, cx| {
-                grid.skip_all(cx);
-            });
-        }
-
-        // Save window state (display + origin + content size)
+        // Save window state (common to both views)
         self.maybe_save_window_state(display, origin, size);
 
-        div()
-            .id("root")
-            .size_full()
-            .bg(rgb(0x000000))
-            .child(self.grid.clone())
+        match &self.state {
+            ViewState::Welcome(welcome) => div()
+                .id("root")
+                .size_full()
+                .bg(rgb(0x111111))
+                .child(welcome.clone()),
+            ViewState::Grid { grid, .. } => {
+                // Handle resize for grid
+                if size_changed {
+                    self.handle_resize(size, cx);
+                }
+
+                // Check if skip all was requested (AppState exists in grid mode)
+                let skip_requested =
+                    cx.update_global::<AppState, _>(|state, _cx| state.take_skip_all_request());
+                if skip_requested {
+                    grid.update(cx, |grid, cx| {
+                        grid.skip_all(cx);
+                    });
+                }
+
+                div()
+                    .id("root")
+                    .size_full()
+                    .bg(rgb(0x000000))
+                    .child(grid.clone())
+            }
+        }
     }
 }

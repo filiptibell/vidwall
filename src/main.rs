@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{App, AppContext, Application, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use rand::seq::SliceRandom;
 
 mod audio;
@@ -51,32 +51,111 @@ fn main() {
         let cli_paths: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
 
         if !cli_paths.is_empty() {
+            // CLI paths provided - go directly to video wall
             open_app_with_paths(cli_paths, cx);
         } else {
-            let future = cx.prompt_for_paths(gpui::PathPromptOptions {
-                files: true,
-                directories: true,
-                multiple: true,
-                prompt: Some("Select videos or folders".into()),
-            });
-
-            cx.spawn(async |cx: &mut AsyncApp| {
-                if let Ok(Ok(Some(paths))) = future.await {
-                    if !paths.is_empty() {
-                        cx.update(|cx| {
-                            open_app_with_paths(paths, cx);
-                        })
-                        .ok();
-                    }
-                }
-            })
-            .detach();
+            // No paths - show welcome screen first
+            open_app_with_welcome(cx);
         }
     });
 }
 
+/// Open the app with a welcome screen (no videos selected yet).
+fn open_app_with_welcome(cx: &mut App) {
+    // Try to load saved window state, or use defaults
+    let (bounds, display_id) = if let Some(saved_state) = WindowState::load() {
+        let display_id = saved_state.display_id(cx);
+        let bounds = saved_state.to_bounds(cx);
+        (bounds, display_id)
+    } else {
+        let bounds = Bounds::centered(
+            None,
+            size(px(DEFAULT_WIDTH as f32), px(DEFAULT_HEIGHT as f32)),
+            cx,
+        );
+        (bounds, None)
+    };
+
+    let window = cx
+        .open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                display_id,
+                focus: true,
+                kind: gpui::WindowKind::PopUp,
+                titlebar: Some(gpui::TitlebarOptions {
+                    title: Some("Video Wall".into()),
+                    appears_transparent: false,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            |_window, cx| cx.new(|cx| RootView::new_welcome(cx)),
+        )
+        .expect("Failed to open window");
+
+    let _ = window;
+    cx.activate(true);
+}
+
+/// Open the app directly with video paths (CLI mode).
 fn open_app_with_paths(paths: Vec<PathBuf>, cx: &mut App) {
-    // Initialize shared resources
+    // Initialize video playback system
+    let ready_videos = initialize_video_playback(paths.clone(), cx);
+
+    // Determine window title
+    let window_title = if paths.len() == 1 {
+        paths[0]
+            .file_name()
+            .map(|s| format!("Video Wall - {}", s.to_string_lossy()))
+            .unwrap_or_else(|| "Video Wall".to_string())
+    } else {
+        format!("Video Wall - {} sources", paths.len())
+    };
+
+    // Try to load saved window state, or use defaults
+    let (bounds, display_id) = if let Some(saved_state) = WindowState::load() {
+        println!("Restored window state from saved state");
+        let display_id = saved_state.display_id(cx);
+        let bounds = saved_state.to_bounds(cx);
+        (bounds, display_id)
+    } else {
+        let bounds = Bounds::centered(
+            None,
+            size(px(DEFAULT_WIDTH as f32), px(DEFAULT_HEIGHT as f32)),
+            cx,
+        );
+        (bounds, None)
+    };
+
+    // Open window with grid view
+    let ready_videos_for_window = Arc::clone(&ready_videos);
+    let window = cx
+        .open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                display_id,
+                focus: true,
+                kind: gpui::WindowKind::PopUp,
+                titlebar: Some(gpui::TitlebarOptions {
+                    title: Some(window_title.into()),
+                    appears_transparent: false,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            |_window, cx| cx.new(|cx| RootView::new_with_videos(ready_videos_for_window, cx)),
+        )
+        .expect("Failed to open window");
+
+    let _ = window;
+    cx.activate(true);
+}
+
+/// Initialize the video playback system (audio, mixer, scanner).
+///
+/// This is called both from CLI mode and when transitioning from welcome screen.
+pub fn initialize_video_playback(paths: Vec<PathBuf>, cx: &mut App) -> Arc<ReadyVideos> {
     let ready_videos = Arc::new(ReadyVideos::new());
     let mixer = Arc::new(AudioMixer::new(DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS));
 
@@ -103,58 +182,6 @@ fn open_app_with_paths(paths: Vec<PathBuf>, cx: &mut App) {
         Box::leak(output);
     }
 
-    // Determine window title
-    let window_title = if paths.len() == 1 {
-        paths[0]
-            .file_name()
-            .map(|s| format!("Video Grid - {}", s.to_string_lossy()))
-            .unwrap_or_else(|| "Video Grid".to_string())
-    } else {
-        format!("Video Grid - {} sources", paths.len())
-    };
-
-    // Try to load saved window state, or use defaults
-    let (bounds, display_id) = if let Some(saved_state) = WindowState::load() {
-        println!("Restored window state from saved state");
-        let display_id = saved_state.display_id(cx);
-        let bounds = saved_state.to_bounds(cx);
-        (bounds, display_id)
-    } else {
-        let bounds = Bounds::centered(
-            None,
-            size(px(DEFAULT_WIDTH as f32), px(DEFAULT_HEIGHT as f32)),
-            cx,
-        );
-        (bounds, None)
-    };
-
-    // Open window with empty grid (will be filled as videos are validated)
-    let ready_videos_for_window = Arc::clone(&ready_videos);
-    let window = cx
-        .open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                display_id,
-                focus: true,
-                kind: gpui::WindowKind::PopUp,
-                titlebar: Some(gpui::TitlebarOptions {
-                    title: Some(window_title.into()),
-                    appears_transparent: false,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |_window, cx| cx.new(|cx| RootView::new(ready_videos_for_window, cx)),
-        )
-        .expect("Failed to open window");
-
-    // Save window bounds when closed
-    // We need to save the bounds before the window is destroyed, so we do it via
-    // observing window bounds changes in RootView instead
-    let _ = window;
-
-    cx.activate(true);
-
     println!("\nKeyboard shortcuts:");
     println!("  Space  - Pause/Resume");
     println!("  M      - Mute/Unmute");
@@ -176,9 +203,11 @@ fn open_app_with_paths(paths: Vec<PathBuf>, cx: &mut App) {
         paths.len()
     );
 
-    // Process videos in parallel using 8 worker threads
+    // Process videos in parallel using worker threads
     let ready_videos_for_scan = Arc::clone(&ready_videos);
     std::thread::spawn(move || {
         VideoScanner::probe_all_parallel(ready_videos_for_scan, candidates);
     });
+
+    ready_videos
 }

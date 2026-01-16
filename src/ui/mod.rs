@@ -5,6 +5,7 @@ mod grid_view;
 mod root_view;
 mod video_element;
 mod video_slot;
+mod welcome_view;
 
 pub use actions::register_shortcuts;
 pub use app_state::AppState;
