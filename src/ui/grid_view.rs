@@ -58,6 +58,11 @@ impl GridView {
                 mixer.set_stream(index, None);
             }
 
+            // Explicitly stop all players before dropping to release file handles
+            for slot in &self.slots {
+                slot.read(cx).player().stop();
+            }
+
             self.slots.clear();
             cx.update_global::<AppState, _>(|state, _cx| {
                 state.truncate_players(0);
@@ -84,6 +89,11 @@ impl GridView {
             for index in new_count..old_count {
                 // Clear audio stream for this slot
                 mixer.set_stream(index, None);
+            }
+
+            // Explicitly stop players being removed to release file handles
+            for index in new_count..old_count {
+                self.slots[index].read(cx).player().stop();
             }
 
             // Remove slots and update AppState
@@ -198,6 +208,9 @@ impl GridView {
 
         let orientation = self.config.orientation;
 
+        // Stop the old player first to release file handles before opening new ones
+        self.slots[index].read(cx).player().stop();
+
         // Get paths of currently playing videos (excluding the one being replaced)
         let current_paths: Vec<_> = self
             .slots
@@ -269,6 +282,11 @@ impl GridView {
         let mixer = Arc::clone(&app_state.mixer);
         for index in 0..self.slots.len() {
             mixer.set_stream(index, None);
+        }
+
+        // Explicitly stop all players before dropping them to ensure file handles are released
+        for slot in &self.slots {
+            slot.read(cx).player().stop();
         }
 
         // Clear all slots
