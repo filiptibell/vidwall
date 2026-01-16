@@ -90,7 +90,7 @@ fn open_app_with_welcome(cx: &mut App) {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| RootView::new_welcome(cx)),
+            |_window, cx| cx.new(RootView::new_welcome),
         )
         .expect("Failed to open window");
 

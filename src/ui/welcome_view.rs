@@ -47,6 +47,15 @@ impl WelcomeView {
             match future.await {
                 Ok(Ok(Some(paths))) if !paths.is_empty() => {
                     cx.update(|cx| {
+                        // Activate the window to bring it to front after file picker closes
+                        if let Some(window) = cx.active_window() {
+                            window
+                                .update(cx, |_, window, _cx| {
+                                    window.activate_window();
+                                })
+                                .ok();
+                        }
+
                         this.update(cx, |_this, cx| {
                             cx.emit(VideosSelected { paths });
                         })
@@ -55,8 +64,17 @@ impl WelcomeView {
                     .ok();
                 }
                 _ => {
-                    // Cancelled or error - reset selecting state
+                    // Cancelled or error - reset selecting state and activate window
                     cx.update(|cx| {
+                        // Activate window even on cancel to bring it back to front
+                        if let Some(window) = cx.active_window() {
+                            window
+                                .update(cx, |_, window, _cx| {
+                                    window.activate_window();
+                                })
+                                .ok();
+                        }
+
                         this.update(cx, |this, cx| {
                             this.is_selecting = false;
                             cx.notify();
