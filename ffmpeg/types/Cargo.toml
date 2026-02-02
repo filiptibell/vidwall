@@ -6,3 +6,4 @@ rust-version.workspace = true
 description = "Shared types for the ffmpeg crate ecosystem"
 
 [dependencies]
+static_assertions = "1.1"

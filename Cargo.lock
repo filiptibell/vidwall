@@ -1757,6 +1757,9 @@ dependencies = [
 [[package]]
 name = "ffmpeg-types"
 version = "0.1.0"
+dependencies = [
+ "static_assertions",
+]
 
 [[package]]
 name = "filedescriptor"
