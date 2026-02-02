@@ -1726,6 +1726,7 @@ dependencies = [
 name = "ffmpeg-sink"
 version = "0.1.0"
 dependencies = [
+ "ffmpeg-next",
  "ffmpeg-types",
 ]
 
