@@ -404,18 +404,20 @@ impl VideoPlayer {
         // Remember current state
         let was_paused = self.is_paused();
 
-        // Seek video pipeline
-        self.video_pipeline.seek_to(position)?;
+        // Seek video pipeline - get actual position (nearest keyframe)
+        let actual_position = self.video_pipeline.seek_to(position)?;
 
-        // Seek audio pipeline if present, get new consumer
+        // Seek audio pipeline to the ACTUAL position (not requested)
+        // This ensures audio and video are aligned to the same keyframe
         let new_consumer = if let Some(ref audio) = self.audio_pipeline {
-            Some(audio.seek_to(position)?)
+            Some(audio.seek_to(actual_position)?)
         } else {
             None
         };
 
-        // Reset playback clock (for wall-time clock; audio clock is reset by pipeline)
-        self.playback_clock.seek_to(position);
+        // Reset playback clock to ACTUAL position
+        // This is the key fix: clock must match where we actually seeked to
+        self.playback_clock.seek_to(actual_position);
 
         // Clear frame state
         {

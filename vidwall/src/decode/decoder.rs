@@ -3,6 +3,7 @@ use std::ptr;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 use std::time::Duration;
 
@@ -254,22 +255,25 @@ pub fn audio_demux<P: AsRef<Path>>(
     This is part of the separated pipeline architecture to prevent deadlocks.
 
     If `start_position` is provided, seeks to that position before demuxing.
+    If `actual_position_tx` is provided, sends the actual seek position (nearest keyframe).
 */
 pub fn video_demux<P: AsRef<Path>>(
     path: P,
     video_packets: Arc<PacketQueue>,
     stop_flag: Arc<AtomicBool>,
     start_position: Option<Duration>,
+    actual_position_tx: Option<mpsc::Sender<Duration>>,
 ) -> Result<(), DecoderError> {
     ffmpeg_next::init()?;
 
     let mut input_ctx = input(&path)?;
 
-    let video_stream_index = input_ctx
+    let video_stream = input_ctx
         .streams()
         .best(Type::Video)
-        .ok_or(DecoderError::NoVideoStream)?
-        .index();
+        .ok_or(DecoderError::NoVideoStream)?;
+    let video_stream_index = video_stream.index();
+    let time_base = video_stream.time_base();
 
     // Seek to start position if specified
     if let Some(pos) = start_position {
@@ -278,6 +282,7 @@ pub fn video_demux<P: AsRef<Path>>(
     }
 
     let mut pkt_count = 0u64;
+    let mut actual_position_sent = actual_position_tx.is_none();
 
     // Process all packets, but only extract video
     for (stream, packet) in input_ctx.packets() {
@@ -288,6 +293,19 @@ pub fn video_demux<P: AsRef<Path>>(
 
         // ONLY process video packets - skip everything else
         if stream.index() == video_stream_index {
+            // Send actual position from first packet after seek
+            if !actual_position_sent {
+                if let Some(ref tx) = actual_position_tx {
+                    let actual_pos = if let Some(pts) = packet.pts() {
+                        pts_to_duration(pts, time_base)
+                    } else {
+                        start_position.unwrap_or(Duration::ZERO)
+                    };
+                    let _ = tx.send(actual_pos);
+                }
+                actual_position_sent = true;
+            }
+
             let pkt = Packet::new(
                 packet.data().map(|d| d.to_vec()).unwrap_or_default(),
                 packet.pts().unwrap_or(0),

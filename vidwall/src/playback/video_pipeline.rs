@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -69,7 +70,7 @@ impl VideoPipeline {
             let path = path.clone();
             let packets = Arc::clone(&packet_queue);
             let stop = Arc::clone(&stop_flag);
-            thread::spawn(move || video_demux(path, packets, stop, None))
+            thread::spawn(move || video_demux(path, packets, stop, None, None))
         };
 
         // Spawn decode thread
@@ -117,8 +118,11 @@ impl VideoPipeline {
     /**
         Seek to a new position in the video.
         Stops current threads, clears queues, and restarts from the new position.
+
+        Returns the actual position that was seeked to (nearest keyframe),
+        which may be before the requested position.
     */
-    pub fn seek_to(&self, position: Duration) -> Result<(), DecoderError> {
+    pub fn seek_to(&self, position: Duration) -> Result<Duration, DecoderError> {
         // 1. Signal threads to stop
         self.stop_flag.store(true, Ordering::Relaxed);
         self.packet_queue.close();
@@ -140,12 +144,17 @@ impl VideoPipeline {
         self.packet_queue.reopen();
         self.frame_queue.reopen();
 
+        // Channel to receive actual position from demux thread
+        let (position_tx, position_rx) = mpsc::channel();
+
         // 4. Spawn new threads starting at the seek position
         let demux_handle = {
             let path = self.path.clone();
             let packets = Arc::clone(&self.packet_queue);
             let stop = Arc::clone(&self.stop_flag);
-            thread::spawn(move || video_demux(path, packets, stop, Some(position)))
+            thread::spawn(move || {
+                video_demux(path, packets, stop, Some(position), Some(position_tx))
+            })
         };
 
         let decode_handle = {
@@ -166,7 +175,12 @@ impl VideoPipeline {
             inner.decode_handle = Some(decode_handle);
         }
 
-        Ok(())
+        // Wait for actual position from demux thread (with timeout)
+        let actual_position = position_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(position);
+
+        Ok(actual_position)
     }
 
     /**
