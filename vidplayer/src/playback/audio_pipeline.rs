@@ -1,10 +1,13 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use bytemuck::cast_slice;
+
 use ffmpeg_decode::{AudioDecoder, AudioDecoderConfig};
 use ffmpeg_source::{Source, SourceConfig, StreamFilter};
 use ffmpeg_transform::{AudioTransform, AudioTransformConfig};
