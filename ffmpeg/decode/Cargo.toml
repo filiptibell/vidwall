@@ -7,3 +7,12 @@ description = "Media decoding for the ffmpeg crate ecosystem"
 
 [dependencies]
 ffmpeg-types = { path = "../types" }
+ffmpeg-source = { path = "../source" }
+ffmpeg-next = "8"
+
+[features]
+default = []
+# Hardware acceleration features
+videotoolbox = []  # macOS
+vaapi = []         # Linux
+cuda = []          # NVIDIA

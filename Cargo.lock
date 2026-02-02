@@ -1698,6 +1698,8 @@ dependencies = [
 name = "ffmpeg-decode"
 version = "0.1.0"
 dependencies = [
+ "ffmpeg-next",
+ "ffmpeg-source",
  "ffmpeg-types",
 ]
 
