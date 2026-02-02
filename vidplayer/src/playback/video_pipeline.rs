@@ -107,10 +107,12 @@ impl VideoPipeline {
         self.height
     }
 
-    /// Seek to a position in the video.
-    ///
-    /// Returns the actual position that was seeked to (nearest keyframe),
-    /// which may be before the requested position.
+    /**
+        Seek to a position in the video.
+
+        Returns the actual position that was seeked to (nearest keyframe),
+        which may be before the requested position.
+    */
     pub fn seek_to(&self, position: Duration) -> Result<Duration, ffmpeg_types::Error> {
         // Stop threads
         self.stop_flag.store(true, Ordering::Relaxed);
