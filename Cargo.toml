@@ -4,18 +4,20 @@ members = [
     "vidwall",
     "vidplayer",
     "vidproxy",
-    "ffmpeg/types",
-    "ffmpeg/source",
-    "ffmpeg/decode",
-    "ffmpeg/transform",
-    "ffmpeg/encode",
-    "ffmpeg/sink",
 ]
 
 [workspace.package]
+version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
-license = "MIT"
+publish = false
+
+[workspace.dependencies]
+ffmpeg-types = { git = "https://github.com/tibellium/crates", rev = "0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1" }
+ffmpeg-source = { git = "https://github.com/tibellium/crates", rev = "0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1" }
+ffmpeg-decode = { git = "https://github.com/tibellium/crates", rev = "0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1" }
+ffmpeg-transform = { git = "https://github.com/tibellium/crates", rev = "0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1" }
+ffmpeg-encode = { git = "https://github.com/tibellium/crates", rev = "0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1" }
+ffmpeg-sink = { git = "https://github.com/tibellium/crates", rev = "0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1" }
 
 [profile.release]
 opt-level = 3

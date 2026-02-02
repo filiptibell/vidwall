@@ -1,8 +1,8 @@
 [package]
 name = "vidplayer"
-version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+publish = { workspace = true }
 
 [[bin]]
 name = "vidplayer"
@@ -10,10 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 # FFmpeg crate ecosystem
-ffmpeg-types = { path = "../ffmpeg/types" }
-ffmpeg-source = { path = "../ffmpeg/source" }
-ffmpeg-decode = { path = "../ffmpeg/decode" }
-ffmpeg-transform = { path = "../ffmpeg/transform" }
+ffmpeg-types.workspace = true
+ffmpeg-source.workspace = true
+ffmpeg-decode.workspace = true
+ffmpeg-transform.workspace = true
 
 # GUI framework
 gpui = "0.2"

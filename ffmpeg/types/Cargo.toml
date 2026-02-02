@@ -1,9 +1,0 @@
-[package]
-name = "ffmpeg-types"
-version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
-description = "Shared types for the ffmpeg crate ecosystem"
-
-[dependencies]
-static_assertions = "1.1"

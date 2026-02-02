@@ -1832,18 +1832,11 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-decode"
-version = "0.1.0"
+version = "0.0.0"
+source = "git+https://github.com/tibellium/crates?rev=0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1#0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-source",
- "ffmpeg-types",
-]
-
-[[package]]
-name = "ffmpeg-encode"
-version = "0.1.0"
-dependencies = [
- "ffmpeg-next",
  "ffmpeg-types",
 ]
 
@@ -1860,7 +1853,8 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-sink"
-version = "0.1.0"
+version = "0.0.0"
+source = "git+https://github.com/tibellium/crates?rev=0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1#0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-types",
@@ -1868,7 +1862,8 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-source"
-version = "0.1.0"
+version = "0.0.0"
+source = "git+https://github.com/tibellium/crates?rev=0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1#0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-types",
@@ -1890,7 +1885,8 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-transform"
-version = "0.1.0"
+version = "0.0.0"
+source = "git+https://github.com/tibellium/crates?rev=0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1#0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-types",
@@ -1898,7 +1894,8 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-types"
-version = "0.1.0"
+version = "0.0.0"
+source = "git+https://github.com/tibellium/crates?rev=0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1#0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1"
 dependencies = [
  "static_assertions",
 ]
@@ -6283,7 +6280,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vidplayer"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "bytemuck",
  "cpal",
@@ -6303,7 +6300,7 @@ dependencies = [
 
 [[package]]
 name = "vidproxy"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "axum",
  "clap",
@@ -6317,7 +6314,7 @@ dependencies = [
 
 [[package]]
 name = "vidwall"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "cpal",
  "dirs 5.0.1",
