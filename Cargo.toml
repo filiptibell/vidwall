@@ -4,6 +4,7 @@ members = [
     "vidwall",
     "vidplayer",
     "vidproxy",
+    "drm-sniff",
 ]
 
 [workspace.package]
