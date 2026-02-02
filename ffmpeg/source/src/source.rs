@@ -64,6 +64,8 @@ pub struct Source {
     video_codec_config: Option<CodecConfig>,
     /// Audio codec config (if present).
     audio_codec_config: Option<CodecConfig>,
+    /// Buffered packet from seek operation (returned on next next_packet call).
+    buffered_packet: Option<Packet>,
 }
 
 impl Source {
@@ -140,6 +142,7 @@ impl Source {
             audio_time_base,
             video_codec_config,
             audio_codec_config,
+            buffered_packet: None,
         })
     }
 
@@ -224,6 +227,18 @@ impl Source {
         Use `packet.stream_type` to determine if it's video or audio.
     */
     pub fn next_packet(&mut self) -> Result<Option<Packet>> {
+        // Return buffered packet first (from seek operation)
+        if let Some(packet) = self.buffered_packet.take() {
+            return Ok(Some(packet));
+        }
+
+        self.read_next_packet_internal()
+    }
+
+    /**
+        Internal method to read the next packet from the demuxer.
+    */
+    fn read_next_packet_internal(&mut self) -> Result<Option<Packet>> {
         loop {
             // Get next packet from demuxer
             let (stream, ffmpeg_packet) = match self.input.packets().next() {
@@ -269,10 +284,11 @@ impl Source {
         Seeks to the nearest keyframe at or before the target position.
         After seeking, you should flush any decoder buffers.
 
-        Note: The actual position after seeking may be before the target
-        due to keyframe alignment.
+        Returns the actual position that was seeked to (the keyframe position),
+        which may be before the requested target due to keyframe alignment.
+        Callers should use this returned position to reset their playback clock.
     */
-    pub fn seek(&mut self, position: Duration) -> Result<()> {
+    pub fn seek(&mut self, position: Duration) -> Result<Duration> {
         // Convert position to FFmpeg's time base (microseconds)
         let timestamp = (position.as_secs_f64() * ffmpeg_next::ffi::AV_TIME_BASE as f64) as i64;
 
@@ -280,7 +296,19 @@ impl Source {
             .seek(timestamp, ..timestamp)
             .map_err(|e| Error::codec(format!("seek failed: {}", e)))?;
 
-        Ok(())
+        // Clear any previously buffered packet
+        self.buffered_packet = None;
+
+        // Read the first packet to determine actual position.
+        // This packet is buffered and will be returned by next_packet().
+        if let Some(packet) = self.read_next_packet_internal()? {
+            let actual_position = packet.presentation_time().unwrap_or(position);
+            self.buffered_packet = Some(packet);
+            Ok(actual_position)
+        } else {
+            // No packets available (e.g., seeked past end)
+            Ok(position)
+        }
     }
 }
 

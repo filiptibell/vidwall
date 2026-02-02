@@ -217,7 +217,9 @@ fn audio_demux(
     )?;
 
     if let Some(pos) = start_position {
-        source.seek(pos)?;
+        // seek() returns the actual position, but for audio we don't need
+        // it since the video pipeline determines the actual seek position
+        let _ = source.seek(pos)?;
     }
 
     for result in &mut source {

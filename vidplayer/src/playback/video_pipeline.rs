@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -61,7 +62,7 @@ impl VideoPipeline {
             let packets = Arc::clone(&packet_queue);
             let stop = Arc::clone(&stop_flag);
             thread::spawn(move || {
-                if let Err(e) = video_demux(&path, packets, stop, start_position) {
+                if let Err(e) = video_demux(&path, packets, stop, start_position, None) {
                     eprintln!("[video_demux] error: {}", e);
                 }
             })
@@ -106,7 +107,11 @@ impl VideoPipeline {
         self.height
     }
 
-    pub fn seek_to(&self, position: Duration) -> Result<(), ffmpeg_types::Error> {
+    /// Seek to a position in the video.
+    ///
+    /// Returns the actual position that was seeked to (nearest keyframe),
+    /// which may be before the requested position.
+    pub fn seek_to(&self, position: Duration) -> Result<Duration, ffmpeg_types::Error> {
         // Stop threads
         self.stop_flag.store(true, Ordering::Relaxed);
         self.packet_queue.close();
@@ -128,13 +133,17 @@ impl VideoPipeline {
         self.packet_queue.reopen();
         self.frame_queue.reopen();
 
+        // Channel to receive actual position from demux thread
+        let (position_tx, position_rx) = mpsc::channel();
+
         // Spawn new threads
         let demux_handle = {
             let path = self.path.clone();
             let packets = Arc::clone(&self.packet_queue);
             let stop = Arc::clone(&self.stop_flag);
             thread::spawn(move || {
-                if let Err(e) = video_demux(&path, packets, stop, Some(position)) {
+                if let Err(e) = video_demux(&path, packets, stop, Some(position), Some(position_tx))
+                {
                     eprintln!("[video_demux] error: {}", e);
                 }
             })
@@ -159,7 +168,12 @@ impl VideoPipeline {
             inner.decode_handle = Some(decode_handle);
         }
 
-        Ok(())
+        // Wait for actual position from demux thread (with timeout)
+        let actual_position = position_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(position);
+
+        Ok(actual_position)
     }
 
     pub fn stop(&self) {
@@ -188,6 +202,7 @@ fn video_demux(
     packets: Arc<PacketQueue>,
     stop_flag: Arc<AtomicBool>,
     start_position: Option<Duration>,
+    position_tx: Option<mpsc::Sender<Duration>>,
 ) -> Result<(), ffmpeg_types::Error> {
     let mut source = Source::open(
         path,
@@ -197,7 +212,11 @@ fn video_demux(
     )?;
 
     if let Some(pos) = start_position {
-        source.seek(pos)?;
+        let actual_position = source.seek(pos)?;
+        // Send actual position back to caller
+        if let Some(tx) = position_tx {
+            let _ = tx.send(actual_position);
+        }
     }
 
     for result in &mut source {
