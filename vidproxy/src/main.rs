@@ -36,6 +36,10 @@ struct Args {
     /// CENC decryption key (hex string, 32 chars for AES-128)
     #[arg(short = 'k', long)]
     decryption_key: Option<String>,
+
+    /// Channel name for IPTV playlist
+    #[arg(short = 'c', long, default_value = "Live TV")]
+    channel_name: String,
 }
 
 fn parse_headers(headers: &[String]) -> Vec<(String, String)> {
@@ -88,11 +92,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start HTTP server
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
     let server_shutdown_rx = shutdown_rx.clone();
+    let channel_name = args.channel_name.clone();
 
-    let server_handle =
-        tokio::spawn(
-            async move { server::run_server(addr, segment_manager, server_shutdown_rx).await },
-        );
+    let server_handle = tokio::spawn(async move {
+        server::run_server(addr, segment_manager, server_shutdown_rx, &channel_name).await
+    });
 
     println!(
         "Proxying {} -> http://localhost:{}/playlist.m3u8",
