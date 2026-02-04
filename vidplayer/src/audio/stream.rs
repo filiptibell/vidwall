@@ -6,12 +6,11 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+use ffmpeg_types::AudioClock;
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Observer, Producer, Split},
 };
-
-use ffmpeg_types::AudioClock;
 
 struct AtomicF32 {
     inner: AtomicU32,

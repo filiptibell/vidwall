@@ -5,10 +5,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use ffmpeg_types::{AudioClock, Clock, WallClock};
 use gpui::RenderImage;
 use image::{Frame, RgbaImage};
-
-use ffmpeg_types::{AudioClock, Clock, WallClock};
 
 use crate::audio::AudioStreamConsumer;
 

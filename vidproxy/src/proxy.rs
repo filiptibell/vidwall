@@ -2,10 +2,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::watch;
-
 use ffmpeg_sink::{Sink, SinkConfig};
 use ffmpeg_source::{Source, SourceConfig};
+use tokio::sync::watch;
 
 use crate::segments::SegmentManager;
 

@@ -38,7 +38,9 @@ struct CdrmResponse {
     message: String,
 }
 
-/// Configuration for the DRM sniffer.
+/**
+    Configuration for the DRM sniffer.
+*/
 #[derive(Clone, Debug)]
 pub struct SnifferConfig {
     /// Target site URL (e.g., "https://www.canalrcn.com")
@@ -65,7 +67,9 @@ impl Default for SnifferConfig {
     }
 }
 
-/// Extract PSSH box (base64) from MPD content.
+/**
+    Extract PSSH box (base64) from MPD content.
+*/
 fn extract_pssh(mpd: &str) -> Option<String> {
     for line in mpd.lines() {
         if line.contains("cenc:pssh") || line.contains("<pssh>") {
@@ -86,7 +90,9 @@ fn extract_pssh(mpd: &str) -> Option<String> {
     None
 }
 
-/// Extract KID from decoded PSSH bytes.
+/**
+    Extract KID from decoded PSSH bytes.
+*/
 fn extract_kid(pssh_bytes: &[u8]) -> Option<String> {
     if pssh_bytes.len() >= 48 {
         Some(
@@ -100,7 +106,9 @@ fn extract_kid(pssh_bytes: &[u8]) -> Option<String> {
     }
 }
 
-/// DRM sniffer that discovers stream credentials using Chrome browser automation.
+/**
+    DRM sniffer that discovers stream credentials using Chrome browser automation.
+*/
 pub struct DrmSniffer {
     config: SnifferConfig,
     credentials_tx: CredentialsSender,
@@ -114,8 +122,10 @@ impl DrmSniffer {
         }
     }
 
-    /// Run the sniffer loop. Discovers credentials and publishes them.
-    /// Re-discovers when refresh is requested.
+    /**
+        Run the sniffer loop. Discovers credentials and publishes them.
+        Re-discovers when refresh is requested.
+    */
     pub async fn run(
         &mut self,
         mut shutdown_rx: watch::Receiver<bool>,
@@ -170,7 +180,9 @@ impl DrmSniffer {
         Ok(())
     }
 
-    /// Discover stream credentials by launching Chrome and sniffing network traffic.
+    /**
+        Discover stream credentials by launching Chrome and sniffing network traffic.
+    */
     async fn discover_credentials(&self) -> Result<StreamCredentials> {
         println!("[sniffer] Launching Chrome...");
 
@@ -289,7 +301,9 @@ impl DrmSniffer {
         Err(anyhow!("Failed to discover all required DRM information"))
     }
 
-    /// Fetch decryption key from CDRM API.
+    /**
+        Fetch decryption key from CDRM API.
+    */
     async fn fetch_decryption_key(&self, pssh: &str, license_url: &str) -> Result<String> {
         println!("[sniffer] Requesting decryption keys from CDRM API...");
 

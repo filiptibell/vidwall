@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use gpui::Global;
-
 use ffmpeg_types::AudioClock;
+use gpui::Global;
 
 use crate::audio::{AudioStream, AudioStreamConsumer};
 use crate::playback::VideoPlayer;

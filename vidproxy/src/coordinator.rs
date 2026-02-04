@@ -7,7 +7,9 @@ use crate::credentials::{CredentialsReceiver, StreamCredentials};
 use crate::proxy;
 use crate::segments::SegmentManager;
 
-/// Result of a pipeline run.
+/**
+    Result of a pipeline run.
+*/
 #[derive(Debug)]
 pub enum PipelineResult {
     /// Pipeline stopped due to shutdown signal
@@ -18,17 +20,25 @@ pub enum PipelineResult {
     SinkError(String),
 }
 
-/// Refresh signal sender type.
+/**
+    Refresh signal sender type.
+*/
 pub type RefreshSender = watch::Sender<bool>;
-/// Refresh signal receiver type.
+/**
+    Refresh signal receiver type.
+*/
 pub type RefreshReceiver = watch::Receiver<bool>;
 
-/// Create a refresh signal channel.
+/**
+    Create a refresh signal channel.
+*/
 pub fn refresh_channel() -> (RefreshSender, RefreshReceiver) {
     watch::channel(false)
 }
 
-/// Coordinator that orchestrates the sniffer and remux pipeline.
+/**
+    Coordinator that orchestrates the sniffer and remux pipeline.
+*/
 pub struct Coordinator {
     credentials_rx: CredentialsReceiver,
     refresh_tx: RefreshSender,
@@ -60,7 +70,9 @@ impl Coordinator {
         }
     }
 
-    /// Run the coordinator loop.
+    /**
+        Run the coordinator loop.
+    */
     pub async fn run(&mut self) -> anyhow::Result<()> {
         println!("[coordinator] Starting, waiting for credentials...");
 
@@ -110,7 +122,9 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Wait for credentials to become available.
+    /**
+        Wait for credentials to become available.
+    */
     async fn wait_for_credentials(&mut self) -> Option<StreamCredentials> {
         loop {
             // Check if we already have credentials
@@ -137,7 +151,9 @@ impl Coordinator {
         }
     }
 
-    /// Run the remux pipeline with the given credentials.
+    /**
+        Run the remux pipeline with the given credentials.
+    */
     async fn run_pipeline(&self, credentials: &StreamCredentials) -> PipelineResult {
         let input_url = credentials.mpd_url.clone();
         let decryption_key = Some(credentials.decryption_key.clone());

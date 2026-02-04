@@ -1,11 +1,13 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::Router;
-use axum::extract::State;
-use axum::http::{HeaderMap, header};
-use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::{
+    Router,
+    extract::State,
+    http::{HeaderMap, header},
+    response::IntoResponse,
+    routing::get,
+};
 use tokio::sync::watch;
 use tower_http::services::ServeDir;
 

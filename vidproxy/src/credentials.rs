@@ -1,6 +1,8 @@
 use tokio::sync::watch;
 
-/// Credentials needed to access a DRM-protected stream.
+/**
+    Credentials needed to access a DRM-protected stream.
+*/
 #[derive(Clone, Debug)]
 pub struct StreamCredentials {
     /// The DASH/HLS manifest URL
@@ -16,7 +18,9 @@ pub struct StreamCredentials {
 pub type CredentialsReceiver = watch::Receiver<Option<StreamCredentials>>;
 pub type CredentialsSender = watch::Sender<Option<StreamCredentials>>;
 
-/// Create a new credentials channel pair.
+/**
+    Create a new credentials channel pair.
+*/
 pub fn credentials_channel() -> (CredentialsSender, CredentialsReceiver) {
     watch::channel(None)
 }
