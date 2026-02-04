@@ -130,7 +130,7 @@ async fn index(State(state): State<AppState>, headers: HeaderMap) -> impl IntoRe
                 "name": m.source.name,
                 "status": status,
                 "info": format!("http://{}/{}/info", host, m.source.id),
-                "channels": format!("http://{}/{}/channels.m3u", host, m.source.id),
+                "m3u": format!("http://{}/{}/channels.m3u", host, m.source.id),
                 "epg": format!("http://{}/{}/epg.xml", host, m.source.id),
             })
         })
@@ -202,8 +202,8 @@ async fn source_info(
         "name": manifest.source.name,
         "status": status,
         "error": error,
-        "channels_m3u": format!("http://{}/{}/channels.m3u", host, source_id),
-        "epg_xml": format!("http://{}/{}/epg.xml", host, source_id),
+        "m3u": format!("http://{}/{}/channels.m3u", host, source_id),
+        "epg": format!("http://{}/{}/epg.xml", host, source_id),
         "channels": channel_list,
     });
 
@@ -216,7 +216,7 @@ async fn source_info(
 /**
     Generate M3U playlist with channels from a specific source.
 */
-async fn channels_m3u(
+async fn source_m3u(
     State(state): State<AppState>,
     Path(source_id): Path<String>,
     headers: HeaderMap,
@@ -279,7 +279,7 @@ async fn channels_m3u(
 /**
     Generate XMLTV EPG data for channels from a specific source.
 */
-async fn epg_xml(
+async fn source_epg(
     State(state): State<AppState>,
     Path(source_id): Path<String>,
     headers: HeaderMap,
@@ -670,8 +670,8 @@ pub async fn run_server(
     let app = Router::new()
         .route("/", get(index))
         .route("/{source_id}/info", get(source_info))
-        .route("/{source_id}/channels.m3u", get(channels_m3u))
-        .route("/{source_id}/epg.xml", get(epg_xml))
+        .route("/{source_id}/channels.m3u", get(source_m3u))
+        .route("/{source_id}/epg.xml", get(source_epg))
         .route("/{source_id}/{channel_id}/info", get(channel_info))
         .route("/{source_id}/{channel_id}/image", get(channel_image))
         .route(
