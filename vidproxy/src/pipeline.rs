@@ -4,7 +4,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use tokio::sync::{Mutex, RwLock, oneshot, watch};
@@ -88,11 +88,8 @@ impl ChannelPipeline {
     }
 
     pub fn record_activity(&self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        self.last_activity.store(now, Ordering::Relaxed);
+        self.last_activity
+            .store(crate::time::now(), Ordering::Relaxed);
     }
 
     pub fn seconds_since_activity(&self) -> u64 {
@@ -100,11 +97,7 @@ impl ChannelPipeline {
         if last == 0 {
             return 0;
         }
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        now.saturating_sub(last)
+        crate::time::now().saturating_sub(last)
     }
 
     /**

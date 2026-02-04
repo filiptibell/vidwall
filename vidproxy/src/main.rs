@@ -14,6 +14,7 @@ mod registry;
 mod segments;
 mod server;
 mod source;
+mod time;
 
 use image_cache::ImageCache;
 use pipeline::{PipelineConfig, PipelineStore};

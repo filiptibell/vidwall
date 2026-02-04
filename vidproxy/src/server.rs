@@ -464,12 +464,13 @@ async fn source_epg(
                     _ => String::new(),
                 };
 
-                // Build icon element if programme has image
-                let prog_icon = programme
-                    .image
-                    .as_ref()
-                    .map(|url| format!("    <icon src=\"{}\"/>\n", escape_xml(url)))
-                    .unwrap_or_default();
+                // Build icon element if programme has image (proxied through our server)
+                let prog_icon = if let Some(url) = &programme.image {
+                    let image_id = state.image_cache.register_proxy_url(url).await;
+                    format!("    <icon src=\"{}/i/{}\"/>\n", base_url, image_id)
+                } else {
+                    String::new()
+                };
 
                 programmes.push_str(&format!(
                     "  <programme start=\"{start}\" stop=\"{stop}\" channel=\"{id}\">\n\
@@ -806,6 +807,26 @@ async fn channel_image(
 }
 
 /**
+    Serve a proxied image by its hash ID.
+*/
+async fn proxy_image(
+    State(state): State<AppState>,
+    Path(image_id): Path<String>,
+) -> Result<Response, StatusCode> {
+    let cached = state.image_cache.get_by_id(&image_id).await.map_err(|e| {
+        eprintln!("[server] Failed to fetch image {}: {}", image_id, e);
+        StatusCode::NOT_FOUND
+    })?;
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, cached.content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .body(Body::from((*cached.data).clone()))
+        .unwrap())
+}
+
+/**
     Run the HTTP server.
 */
 pub async fn run_server(
@@ -825,6 +846,7 @@ pub async fn run_server(
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/i/{image_id}", get(proxy_image))
         .route("/{source_id}/info", get(source_info))
         .route("/{source_id}/channels.m3u", get(source_m3u))
         .route("/{source_id}/epg.xml", get(source_epg))

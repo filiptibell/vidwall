@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -16,21 +17,27 @@ pub struct CachedImage {
 }
 
 /**
-    In-memory cache for channel images, fetched on-demand.
+    In-memory cache for images, fetched on-demand.
+
+    Supports both channel images (keyed by ChannelId) and
+    proxied images (keyed by hash ID, with URL stored server-side).
 */
 pub struct ImageCache {
-    cache: RwLock<HashMap<ChannelId, CachedImage>>,
+    channel_cache: RwLock<HashMap<ChannelId, CachedImage>>,
+    /// Maps hash ID -> (original URL, cached image data)
+    proxy_cache: RwLock<HashMap<String, (String, Option<CachedImage>)>>,
 }
 
 impl ImageCache {
     pub fn new() -> Self {
         Self {
-            cache: RwLock::new(HashMap::new()),
+            channel_cache: RwLock::new(HashMap::new()),
+            proxy_cache: RwLock::new(HashMap::new()),
         }
     }
 
     /**
-        Get an image from cache, or fetch it from the URL if not cached.
+        Get a channel image from cache, or fetch it from the URL if not cached.
     */
     pub async fn get_or_fetch(
         &self,
@@ -40,7 +47,7 @@ impl ImageCache {
     ) -> Result<CachedImage> {
         // Check cache first
         {
-            let cache = self.cache.read().await;
+            let cache = self.channel_cache.read().await;
             if let Some(cached) = cache.get(id) {
                 return Ok(cached.clone());
             }
@@ -51,8 +58,53 @@ impl ImageCache {
 
         // Store in cache
         {
-            let mut cache = self.cache.write().await;
+            let mut cache = self.channel_cache.write().await;
             cache.insert(id.clone(), image.clone());
+        }
+
+        Ok(image)
+    }
+
+    /**
+        Register a URL for proxying and return its hash ID.
+        The URL is stored server-side; only the ID is exposed.
+    */
+    pub async fn register_proxy_url(&self, url: &str) -> String {
+        let id = hash_url(url);
+
+        // Only insert if not already registered
+        let mut cache = self.proxy_cache.write().await;
+        cache.entry(id.clone()).or_insert((url.to_string(), None));
+
+        id
+    }
+
+    /**
+        Get a proxied image by its hash ID, fetching if not cached.
+    */
+    pub async fn get_by_id(&self, id: &str) -> Result<CachedImage> {
+        // Get the URL for this ID
+        let url = {
+            let cache = self.proxy_cache.read().await;
+            let (url, cached) = cache.get(id).ok_or_else(|| anyhow!("Unknown image ID"))?;
+
+            // Return cached image if available
+            if let Some(img) = cached {
+                return Ok(img.clone());
+            }
+
+            url.clone()
+        };
+
+        // Fetch the image
+        let image = fetch_image(&url, None).await?;
+
+        // Store in cache
+        {
+            let mut cache = self.proxy_cache.write().await;
+            if let Some((_, cached)) = cache.get_mut(id) {
+                *cached = Some(image.clone());
+            }
         }
 
         Ok(image)
@@ -63,7 +115,7 @@ impl ImageCache {
     */
     #[allow(dead_code)]
     pub async fn invalidate(&self, id: &ChannelId) {
-        let mut cache = self.cache.write().await;
+        let mut cache = self.channel_cache.write().await;
         cache.remove(id);
     }
 
@@ -72,9 +124,24 @@ impl ImageCache {
     */
     #[allow(dead_code)]
     pub async fn invalidate_source(&self, source: &str) {
-        let mut cache = self.cache.write().await;
+        let mut cache = self.channel_cache.write().await;
         cache.retain(|id, _| id.source != source);
     }
+
+    /**
+        Clear all proxied image registrations (e.g., when EPG refreshes).
+    */
+    #[allow(dead_code)]
+    pub async fn clear_proxy_cache(&self) {
+        let mut cache = self.proxy_cache.write().await;
+        cache.clear();
+    }
+}
+
+fn hash_url(url: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    url.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 impl Default for ImageCache {

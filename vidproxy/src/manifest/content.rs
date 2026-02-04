@@ -66,11 +66,7 @@ fn resolve_expiration(
 
     // Fall back to expires_in (static duration from now)
     if let Some(expires_in) = outputs.expires_in {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        return Ok(Some(now + expires_in));
+        return Ok(Some(crate::time::now() + expires_in));
     }
 
     Ok(None)

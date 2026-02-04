@@ -111,11 +111,7 @@ pub async fn execute_metadata(
 */
 fn resolve_expiration(outputs: &super::types::MetadataOutputs) -> Result<Option<u64>> {
     if let Some(expires_in) = outputs.expires_in {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        return Ok(Some(now + expires_in));
+        return Ok(Some(crate::time::now() + expires_in));
     }
     Ok(None)
 }

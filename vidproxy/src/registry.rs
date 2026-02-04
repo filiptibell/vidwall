@@ -288,11 +288,7 @@ impl ChannelRegistry {
             if let Some(ref stream_info) = entry.stream_info
                 && let Some(expires_at) = stream_info.expires_at
             {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-                return now >= expires_at;
+                return crate::time::now() >= expires_at;
             }
             // No stream info or no expiration = treat as expired
             return entry.stream_info.is_none();
@@ -306,11 +302,7 @@ impl ChannelRegistry {
     pub fn is_discovery_expired(&self, source: &str) -> bool {
         let expirations = self.discovery_expiration.read().unwrap();
         if let Some(Some(expires_at)) = expirations.get(source) {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            return now >= *expires_at;
+            return crate::time::now() >= *expires_at;
         }
         // No expiration set = not expired (discovery runs once at startup)
         false
