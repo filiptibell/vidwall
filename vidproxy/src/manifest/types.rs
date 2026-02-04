@@ -73,6 +73,17 @@ pub enum Transform {
         /// Description value to add
         description: String,
     },
+    /// Rename channels matching by name or id
+    Rename {
+        /// Channel name to match (optional)
+        #[serde(default)]
+        name: Option<String>,
+        /// Channel ID to match (optional)
+        #[serde(default)]
+        id: Option<String>,
+        /// New name to set
+        to: String,
+    },
 }
 
 /**

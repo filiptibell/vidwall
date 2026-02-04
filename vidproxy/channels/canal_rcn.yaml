@@ -46,21 +46,47 @@ process:
       - "Noticias RCN"
       - "Deportes RCN"
       - "Señal Principal"
+      - "Habitaciónes"
   transforms:
-    - kind: AddCategory
+    - kind: Rename
       name: "RCN Señal en Vivo"
-      category: "RCN"
-    - kind: AddCategory
+      to: "RCN - Señal Principal"
+    - kind: Rename
       name: "Noticias RCN"
-      category: "RCN"
-    - kind: AddCategory
+      to: "RCN - Noticias"
+    - kind: Rename
       name: "Deportes RCN"
+      to: "RCN - Deportes"
+
+    - kind: Rename
+      name: "Señal Principal"
+      to: "LCDLF - Señal Principal"
+    - kind: Rename
+      name: "Habitaciónes"
+      to: "LCDLF - Habitaciónes"
+
+    - kind: AddCategory
+      name: "RCN - Señal Principal"
       category: "RCN"
     - kind: AddCategory
-      name: "Señal Principal"
+      name: "RCN - Noticias"
+      category: "RCN"
+    - kind: AddCategory
+      name: "RCN - Deportes"
+      category: "RCN"
+
+    - kind: AddCategory
+      name: "LCDLF - Señal Principal"
       category: "LCDLF"
+    - kind: AddCategory
+      name: "LCDLF - Habitaciónes"
+      category: "LCDLF"
+
     - kind: AddDescription
-      name: "Señal Principal"
+      name: "LCDLF - Señal Principal"
+      description: "Transmisión en vivo 24/7"
+    - kind: AddDescription
+      name: "LCDLF - Habitaciónes"
       description: "Transmisión en vivo 24/7"
 
 # Metadata phase: extract EPG data for all channels

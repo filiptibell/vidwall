@@ -259,6 +259,13 @@ fn apply_transform(channels: &mut [DiscoveredChannel], transform: &Transform) {
                 }
             }
         }
+        Transform::Rename { name, id, to } => {
+            for channel in channels.iter_mut() {
+                if channel_matches(channel, name, id) {
+                    channel.name = Some(to.clone());
+                }
+            }
+        }
     }
 }
 
