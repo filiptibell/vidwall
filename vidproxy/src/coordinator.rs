@@ -1,28 +1,9 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
 use tokio::sync::watch;
 
-use crate::cdrm;
-use crate::proxy;
-use crate::segments::SegmentManager;
 use crate::stream_info::{StreamInfo, StreamInfoReceiver};
-
-/**
-    Result of a pipeline run.
-*/
-#[derive(Debug)]
-pub enum PipelineResult {
-    /// Pipeline stopped due to shutdown signal
-    Shutdown,
-    /// Pipeline stopped due to source error (credentials may be expired)
-    SourceError(String),
-    /// Pipeline stopped due to sink error (may retry with same credentials)
-    SinkError(String),
-    /// Pipeline stopped due to stream expiration (proactive refresh)
-    Expired,
-}
 
 /**
     Refresh signal sender type.
@@ -41,15 +22,16 @@ pub fn refresh_channel() -> (RefreshSender, RefreshReceiver) {
 }
 
 /**
-    Coordinator that orchestrates the sniffer and remux pipeline.
+    Coordinator that monitors stream info and triggers refreshes when needed.
+
+    The coordinator no longer runs the pipeline directly - that's handled by
+    PipelineManager. Instead, it just watches for stream info changes and
+    handles expiration-triggered refreshes.
 */
 pub struct Coordinator {
     stream_info_rx: StreamInfoReceiver,
     refresh_tx: RefreshSender,
     shutdown_rx: watch::Receiver<bool>,
-    segment_manager: Arc<SegmentManager>,
-    output_dir: std::path::PathBuf,
-    segment_duration: Duration,
 }
 
 impl Coordinator {
@@ -57,22 +39,19 @@ impl Coordinator {
         stream_info_rx: StreamInfoReceiver,
         refresh_tx: RefreshSender,
         shutdown_rx: watch::Receiver<bool>,
-        segment_manager: Arc<SegmentManager>,
-        output_dir: std::path::PathBuf,
-        segment_duration: Duration,
     ) -> Self {
         Self {
             stream_info_rx,
             refresh_tx,
             shutdown_rx,
-            segment_manager,
-            output_dir,
-            segment_duration,
         }
     }
 
     /**
         Run the coordinator loop.
+
+        This loop monitors stream info and triggers refreshes before
+        the stream credentials expire.
     */
     pub async fn run(&mut self) -> anyhow::Result<()> {
         println!("[coordinator] Starting, waiting for stream info...");
@@ -94,60 +73,24 @@ impl Coordinator {
             };
 
             println!(
-                "[coordinator] Got stream info, starting pipeline for: {}",
+                "[coordinator] Got stream info: {}",
                 &stream_info.mpd_url[..stream_info.mpd_url.len().min(60)]
             );
 
-            // Calculate refresh time if we have an expiration
-            let refresh_at = stream_info.expires_at.map(|expires| {
-                let now = Utc::now().timestamp() as u64;
-                if expires > now {
-                    // Refresh 60 seconds before expiration
-                    let refresh_in = expires.saturating_sub(now).saturating_sub(60);
-                    if refresh_in > 0 {
-                        println!(
-                            "[coordinator] Stream expires in {}s, will refresh in {}s",
-                            expires - now,
-                            refresh_in
-                        );
-                        Duration::from_secs(refresh_in)
-                    } else {
-                        // Already close to expiring, refresh soon
-                        println!("[coordinator] Stream expiring soon, will refresh in 5s");
-                        Duration::from_secs(5)
-                    }
-                } else {
-                    println!("[coordinator] Stream already expired, refreshing immediately");
-                    Duration::ZERO
-                }
-            });
+            // Wait for expiration or stream info change
+            self.wait_for_refresh_trigger(&stream_info).await;
 
-            // Run the pipeline with optional expiration-based refresh
-            let result = self.run_pipeline(&stream_info, refresh_at).await;
-
-            match result {
-                PipelineResult::Shutdown => {
-                    println!("[coordinator] Pipeline shutdown");
-                    break;
-                }
-                PipelineResult::Expired => {
-                    println!("[coordinator] Stream expiring, requesting refresh...");
-                    let _ = self.refresh_tx.send(true);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    let _ = self.refresh_tx.send(false);
-                }
-                PipelineResult::SourceError(e) => {
-                    println!("[coordinator] Source error: {}, requesting refresh...", e);
-                    let _ = self.refresh_tx.send(true);
-                    // Reset refresh signal for next use
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    let _ = self.refresh_tx.send(false);
-                }
-                PipelineResult::SinkError(e) => {
-                    println!("[coordinator] Sink error: {}, retrying...", e);
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
+            // Check for shutdown before requesting refresh
+            if *self.shutdown_rx.borrow() {
+                println!("[coordinator] Shutdown requested");
+                break;
             }
+
+            // Trigger refresh
+            println!("[coordinator] Requesting stream refresh...");
+            let _ = self.refresh_tx.send(true);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = self.refresh_tx.send(false);
         }
 
         Ok(())
@@ -183,87 +126,60 @@ impl Coordinator {
     }
 
     /**
-        Run the remux pipeline with the given stream info.
-        If `refresh_after` is Some, the pipeline will be stopped for refresh after that duration.
+        Wait until we need to refresh the stream.
+
+        This returns when:
+        - The stream is about to expire (based on expires_at)
+        - The stream info changes (external refresh)
+        - Shutdown is requested
     */
-    async fn run_pipeline(
-        &self,
-        stream_info: &StreamInfo,
-        refresh_after: Option<Duration>,
-    ) -> PipelineResult {
-        let input_url = stream_info.mpd_url.clone();
-
-        // If license_url is present, fetch decryption key via CDRM
-        let decryption_key = if let Some(ref license_url) = stream_info.license_url {
-            match cdrm::get_decryption_key(&stream_info.mpd_url, license_url).await {
-                Ok(key) => Some(key),
-                Err(e) => {
-                    return PipelineResult::SourceError(format!(
-                        "Failed to get decryption key: {}",
-                        e
-                    ));
+    async fn wait_for_refresh_trigger(&mut self, stream_info: &StreamInfo) {
+        // Calculate when we need to refresh
+        let refresh_after = stream_info.expires_at.map(|expires| {
+            let now = Utc::now().timestamp() as u64;
+            if expires > now {
+                // Refresh 60 seconds before expiration
+                let refresh_in = expires.saturating_sub(now).saturating_sub(60);
+                if refresh_in > 0 {
+                    println!(
+                        "[coordinator] Stream expires in {}s, will refresh in {}s",
+                        expires - now,
+                        refresh_in
+                    );
+                    Duration::from_secs(refresh_in)
+                } else {
+                    // Already close to expiring, refresh soon
+                    println!("[coordinator] Stream expiring soon, will refresh in 5s");
+                    Duration::from_secs(5)
                 }
+            } else {
+                println!("[coordinator] Stream already expired, refreshing immediately");
+                Duration::ZERO
             }
-        } else {
-            None
-        };
-
-        let output_dir = self.output_dir.clone();
-        let segment_duration = self.segment_duration;
-        let segment_manager = Arc::clone(&self.segment_manager);
-        let shutdown_rx = self.shutdown_rx.clone();
-
-        // Run pipeline in blocking task
-        let pipeline_handle = tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(proxy::run_remux_pipeline(
-                &input_url,
-                &[], // headers not used
-                decryption_key.as_deref(),
-                &output_dir,
-                segment_duration,
-                segment_manager,
-                shutdown_rx,
-            ))
         });
 
-        // Wait for pipeline completion or expiration timer
-        let result = if let Some(refresh_duration) = refresh_after {
-            tokio::select! {
-                res = pipeline_handle => res,
-                _ = tokio::time::sleep(refresh_duration) => {
-                    return PipelineResult::Expired;
+        // If no expiration, wait indefinitely for stream info change or shutdown
+        let sleep_future = async {
+            if let Some(duration) = refresh_after {
+                if duration > Duration::ZERO {
+                    tokio::time::sleep(duration).await;
                 }
+            } else {
+                // No expiration - wait forever (until stream info change or shutdown)
+                std::future::pending::<()>().await;
             }
-        } else {
-            pipeline_handle.await
         };
 
-        match result {
-            Ok(Ok(())) => {
-                // Pipeline completed normally (source ended)
-                PipelineResult::SourceError("Source ended".to_string())
+        tokio::select! {
+            _ = sleep_future => {
+                // Expiration timer fired
             }
-            Ok(Err(e)) => {
-                let err_str = e.to_string();
-                // Try to categorize the error
-                if err_str.contains("403")
-                    || err_str.contains("410")
-                    || err_str.contains("connection")
-                    || err_str.contains("timeout")
-                {
-                    PipelineResult::SourceError(err_str)
-                } else {
-                    PipelineResult::SinkError(err_str)
-                }
+            _ = self.stream_info_rx.changed() => {
+                // Stream info changed externally
+                println!("[coordinator] Stream info changed");
             }
-            Err(e) => {
-                // Task panicked or was cancelled
-                if e.is_cancelled() {
-                    PipelineResult::Shutdown
-                } else {
-                    PipelineResult::SinkError(e.to_string())
-                }
+            _ = self.shutdown_rx.changed() => {
+                // Shutdown requested
             }
         }
     }

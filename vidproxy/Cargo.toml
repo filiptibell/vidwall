@@ -45,3 +45,4 @@ sxd-xpath = "0.4"
 regex = "1"
 glob-match = "0.2"
 chrono = "0.4.43"
+tokio-util = { version = "0.7.18", features = ["io"] }

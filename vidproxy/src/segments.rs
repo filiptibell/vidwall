@@ -109,4 +109,21 @@ impl SegmentManager {
     pub fn segment_count(&self) -> usize {
         self.segments.lock().unwrap().len()
     }
+
+    /**
+        Clear all segments and remove files from disk.
+    */
+    pub fn clear(&self) {
+        let mut segments = self.segments.lock().unwrap();
+        let dir = self.temp_dir.path();
+
+        // Remove segment files
+        for segment in segments.drain(..) {
+            let path = dir.join(&segment);
+            let _ = fs::remove_file(path);
+        }
+
+        // Also remove playlist file
+        let _ = fs::remove_file(dir.join("playlist.m3u8"));
+    }
 }

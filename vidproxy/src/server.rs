@@ -1,24 +1,28 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::State,
-    http::{HeaderMap, header},
-    response::IntoResponse,
+    body::Body,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use chrono::{Duration, Utc};
 use tokio::sync::watch;
-use tower_http::services::ServeDir;
+use tokio_util::io::ReaderStream;
 
-use crate::segments::SegmentManager;
+use crate::pipeline::PipelineManager;
 use crate::stream_info::StreamInfoReceiver;
 
 #[derive(Clone)]
 struct AppState {
     fallback_channel_name: String,
     stream_info_rx: StreamInfoReceiver,
+    pipeline_manager: Arc<PipelineManager>,
+    output_dir: PathBuf,
 }
 
 async fn channels_m3u(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
@@ -125,29 +129,87 @@ fn escape_xml(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// Serve the HLS playlist, starting the pipeline if needed
+async fn playlist_m3u8(State(state): State<AppState>) -> Result<Response, StatusCode> {
+    // Ensure pipeline is running
+    state.pipeline_manager.ensure_running().await.map_err(|e| {
+        eprintln!("[server] Failed to start pipeline: {}", e);
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
+
+    // Wait for first segment to be ready
+    state.pipeline_manager.wait_for_ready().await.map_err(|e| {
+        eprintln!("[server] Timeout waiting for pipeline: {}", e);
+        StatusCode::GATEWAY_TIMEOUT
+    })?;
+
+    // Record activity
+    state.pipeline_manager.record_activity();
+
+    // Serve the playlist file
+    let playlist_path = state.output_dir.join("playlist.m3u8");
+    serve_file(&playlist_path, "application/vnd.apple.mpegurl").await
+}
+
+/// Serve a segment file and track activity
+async fn serve_segment(
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+) -> Result<Response, StatusCode> {
+    // Record activity for idle tracking
+    state.pipeline_manager.record_activity();
+
+    // Serve the segment file
+    let segment_path = state.output_dir.join(&filename);
+    serve_file(&segment_path, "video/mp2t").await
+}
+
+/// Helper to serve a file with given content type
+async fn serve_file(path: &std::path::Path, content_type: &str) -> Result<Response, StatusCode> {
+    let file = tokio::fs::File::open(path).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            eprintln!("[server] Error opening file {:?}: {}", path, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })?;
+
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(body)
+        .unwrap())
+}
+
 /**
     Run the HTTP server that serves HLS content.
 */
 pub async fn run_server(
     addr: SocketAddr,
-    segment_manager: Arc<SegmentManager>,
+    pipeline_manager: Arc<PipelineManager>,
     mut shutdown_rx: watch::Receiver<bool>,
     channel_name: &str,
     stream_info_rx: StreamInfoReceiver,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let serve_dir =
-        ServeDir::new(segment_manager.output_dir()).append_index_html_on_directories(false);
+    let output_dir = pipeline_manager.output_dir().to_path_buf();
 
     let state = AppState {
         fallback_channel_name: channel_name.to_string(),
         stream_info_rx,
+        pipeline_manager,
+        output_dir,
     };
 
     let app = Router::new()
         .route("/channels.m3u", get(channels_m3u))
         .route("/epg.xml", get(epg_xml))
-        .with_state(state)
-        .fallback_service(serve_dir);
+        .route("/playlist.m3u8", get(playlist_m3u8))
+        .route("/{filename}", get(serve_segment))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     println!("HTTP server listening on http://{}", addr);
