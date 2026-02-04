@@ -33,7 +33,7 @@ discovery:
           each:
             id: "$.id"
             name: "$.content.title"
-            image: "$.content.images[0].url"
+            image: "$.content.images[?(@.type=='THUMB')].url"
 
 # Filter phase: only include channels we care about
 
