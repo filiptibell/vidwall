@@ -83,6 +83,24 @@ pub async fn run_source(manifest: &Manifest, headless: bool) -> Result<SourceRes
         channels
     };
 
+    // Run metadata phase once if present (extracts EPG for all channels from single request)
+    let mut channel_programmes: std::collections::HashMap<String, Vec<crate::manifest::Programme>> =
+        std::collections::HashMap::new();
+
+    if let Some(ref metadata_phase) = manifest.metadata {
+        println!("[source] Running metadata phase...");
+
+        match manifest::execute_metadata(metadata_phase, &tab).await {
+            Ok(result) => {
+                channel_programmes = result.programmes_by_channel;
+            }
+            Err(e) => {
+                eprintln!("[source] Metadata phase failed: {}", e);
+                // Continue without metadata - not fatal
+            }
+        }
+    }
+
     // Run content phase for each channel sequentially in the same tab
     let mut channel_entries = Vec::new();
 
@@ -118,9 +136,13 @@ pub async fn run_source(manifest: &Manifest, headless: bool) -> Result<SourceRes
             }
         }
 
+        // Get programmes for this channel if available
+        let programmes = channel_programmes.remove(&channel.id).unwrap_or_default();
+
         channel_entries.push(ChannelEntry {
             channel: channel.clone(),
             stream_info,
+            programmes,
             last_error,
         });
     }

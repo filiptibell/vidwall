@@ -12,6 +12,9 @@ pub struct Manifest {
     /// Optional filter to apply after discovery
     #[serde(default)]
     pub filter: Option<ChannelFilter>,
+    /// Optional metadata phase to extract EPG data per channel
+    #[serde(default)]
+    pub metadata: Option<MetadataPhase>,
     pub content: ContentPhase,
 }
 
@@ -75,6 +78,27 @@ pub struct DiscoveryOutputs {
     #[serde(default)]
     pub expires_at: Option<String>,
     /// Static expiration duration in seconds (alternative to expires_at)
+    #[serde(default)]
+    pub expires_in: Option<u64>,
+}
+
+/**
+    Metadata phase - optional, extracts EPG data per channel.
+*/
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MetadataPhase {
+    pub steps: Vec<Step>,
+    pub outputs: MetadataOutputs,
+}
+
+/**
+    Outputs from the metadata phase (per-channel EPG data).
+*/
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MetadataOutputs {
+    /// Reference to the extracted programmes array (supports interpolation)
+    pub programmes: String,
+    /// Static expiration duration in seconds for metadata
     #[serde(default)]
     pub expires_in: Option<u64>,
 }
@@ -190,6 +214,7 @@ pub struct Extractor {
     #[serde(default)]
     pub regex: Option<String>,
     /// For jsonpath_array: sub-extractors to apply to each array element
+    /// Supports $parent.field syntax to reference parent objects in nested paths
     #[serde(default)]
     pub each: Option<HashMap<String, String>>,
 }
@@ -207,6 +232,7 @@ pub enum ExtractorKind {
     /// JSONPath query on JSON response body (returns single value)
     JsonPath,
     /// JSONPath query returning array of objects with sub-extractors
+    /// Supports $parent.field syntax in `each` to reference parent objects
     #[serde(rename = "jsonpath_array")]
     JsonPathArray,
     /// JSONPath query followed by regex extraction on the result
@@ -245,11 +271,27 @@ pub struct StreamInfo {
 }
 
 /**
-    Full channel entry combining discovery and content info.
+    A single EPG programme entry.
+*/
+#[derive(Debug, Clone)]
+pub struct Programme {
+    pub title: String,
+    pub description: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub episode: Option<String>,
+    pub season: Option<String>,
+    pub genres: Vec<String>,
+    pub image: Option<String>,
+}
+
+/**
+    Full channel entry combining discovery, metadata, and content info.
 */
 #[derive(Debug, Clone)]
 pub struct ChannelEntry {
     pub channel: DiscoveredChannel,
     pub stream_info: Option<StreamInfo>,
+    pub programmes: Vec<Programme>,
     pub last_error: Option<String>,
 }

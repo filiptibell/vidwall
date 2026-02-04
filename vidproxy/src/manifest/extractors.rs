@@ -33,7 +33,12 @@ pub fn extract(extractor: &Extractor, content: &str, url: &str) -> Result<String
 /**
     Run a jsonpath_array extractor on the given content.
     Returns an array of objects, each with the fields defined in `each`.
-    Objects missing the "id" field are skipped.
+
+    For discovery: Objects missing the "id" field are skipped.
+    For metadata: Objects missing "channel_id" or "title" are skipped.
+
+    Supports `$parent` in field paths to reference parent objects when using
+    nested array paths like `$.result[*].content.epg[*]`.
 */
 pub fn extract_array(extractor: &Extractor, content: &str) -> Result<ExtractedArray> {
     if extractor.kind != ExtractorKind::JsonPathArray {
@@ -57,22 +62,41 @@ pub fn extract_array(extractor: &Extractor, content: &str) -> Result<ExtractedAr
 
 /**
     Extract using JSONPath, returning array of objects.
+    Supports $parent references in field paths for nested array extractions.
 */
 fn extract_jsonpath_array(
     content: &str,
     path: &str,
     each: &HashMap<String, String>,
 ) -> Result<ExtractedArray> {
-    use jsonpath_rust::JsonPath;
-    use std::str::FromStr;
-
     let json: serde_json::Value =
         serde_json::from_str(content).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
+
+    // Check if any field uses $parent - if so, we need to track parent context
+    let needs_parent = each.values().any(|p| p.contains("$parent"));
+
+    if needs_parent {
+        extract_with_parent_context(&json, path, each)
+    } else {
+        extract_simple(&json, path, each)
+    }
+}
+
+/**
+    Simple extraction without parent context tracking.
+*/
+fn extract_simple(
+    json: &serde_json::Value,
+    path: &str,
+    each: &HashMap<String, String>,
+) -> Result<ExtractedArray> {
+    use jsonpath_rust::JsonPath;
+    use std::str::FromStr;
 
     let jsonpath =
         JsonPath::from_str(path).map_err(|e| anyhow!("Invalid JSONPath '{}': {}", path, e))?;
 
-    let results = jsonpath.find_slice(&json);
+    let results = jsonpath.find_slice(json);
 
     if results.is_empty() {
         return Err(anyhow!("JSONPath '{}' returned no results", path));
@@ -83,7 +107,6 @@ fn extract_jsonpath_array(
     for result in results {
         let obj = result.clone().to_data();
 
-        // Apply each sub-extractor to this object
         let mut fields: HashMap<String, Option<String>> = HashMap::new();
 
         for (field_name, field_path) in each {
@@ -91,8 +114,8 @@ fn extract_jsonpath_array(
             fields.insert(field_name.clone(), value);
         }
 
-        // Skip objects that don't have an id
-        if fields.get("id").and_then(|v| v.as_ref()).is_none() {
+        // Skip based on what fields are present
+        if should_skip_item(&fields) {
             continue;
         }
 
@@ -101,12 +124,131 @@ fn extract_jsonpath_array(
 
     if extracted.is_empty() {
         return Err(anyhow!(
-            "JSONPath '{}' returned results but none had a valid 'id'",
+            "JSONPath '{}' returned results but none had required fields",
             path
         ));
     }
 
     Ok(extracted)
+}
+
+/**
+    Extraction with parent context tracking for $parent references.
+    Handles paths like `$.result[*].content.epg[*]` where we need to access
+    fields from the parent `result[*]` item while iterating over `epg[*]`.
+*/
+fn extract_with_parent_context(
+    json: &serde_json::Value,
+    path: &str,
+    each: &HashMap<String, String>,
+) -> Result<ExtractedArray> {
+    use jsonpath_rust::JsonPath;
+    use std::str::FromStr;
+
+    // Parse the path to find where the nested arrays are
+    // e.g., "$.result[*].content.epg[*]" -> parent: "$.result[*]", child: "$.content.epg[*]"
+    let (parent_path, child_path) = split_nested_path(path)?;
+
+    let parent_jsonpath = JsonPath::from_str(&parent_path)
+        .map_err(|e| anyhow!("Invalid parent JSONPath '{}': {}", parent_path, e))?;
+
+    let child_jsonpath = JsonPath::from_str(&child_path)
+        .map_err(|e| anyhow!("Invalid child JSONPath '{}': {}", child_path, e))?;
+
+    let parent_results = parent_jsonpath.find_slice(json);
+
+    if parent_results.is_empty() {
+        return Err(anyhow!(
+            "Parent JSONPath '{}' returned no results",
+            parent_path
+        ));
+    }
+
+    let mut extracted = Vec::new();
+
+    for parent_result in parent_results {
+        let parent_obj = parent_result.clone().to_data();
+        let child_results = child_jsonpath.find_slice(&parent_obj);
+
+        for child_result in child_results {
+            let child_obj = child_result.clone().to_data();
+
+            let mut fields: HashMap<String, Option<String>> = HashMap::new();
+
+            for (field_name, field_path) in each {
+                let value = if field_path.starts_with("$parent") {
+                    // Extract from parent object
+                    let parent_field_path = field_path.replacen("$parent", "$", 1);
+                    extract_jsonpath_value(&parent_obj, &parent_field_path)
+                } else {
+                    // Extract from child object
+                    extract_jsonpath_value(&child_obj, field_path)
+                };
+                fields.insert(field_name.clone(), value);
+            }
+
+            if should_skip_item(&fields) {
+                continue;
+            }
+
+            extracted.push(fields);
+        }
+    }
+
+    if extracted.is_empty() {
+        return Err(anyhow!(
+            "Nested extraction returned no valid items with required fields"
+        ));
+    }
+
+    Ok(extracted)
+}
+
+/**
+    Split a nested JSONPath into parent and child portions.
+    e.g., "$.result[*].content.epg[*]" -> ("$.result[*]", "$.content.epg[*]")
+
+    Finds the last `[*]` and splits there, as that's typically where
+    the parent/child boundary is for nested array access.
+*/
+fn split_nested_path(path: &str) -> Result<(String, String)> {
+    // Find all occurrences of [*]
+    let indices: Vec<_> = path.match_indices("[*]").collect();
+
+    if indices.len() < 2 {
+        return Err(anyhow!(
+            "Path '{}' needs at least two [*] for $parent support",
+            path
+        ));
+    }
+
+    // Split at the first [*] - that's the parent array
+    let (first_idx, _) = indices[0];
+    let split_point = first_idx + 3; // After the first [*]
+
+    let parent_path = path[..split_point].to_string();
+    let child_path = format!("${}", &path[split_point..]);
+
+    Ok((parent_path, child_path))
+}
+
+/**
+    Determine if an extracted item should be skipped based on required fields.
+    - For discovery: requires "id"
+    - For metadata: requires "channel_id" and "title"
+*/
+fn should_skip_item(fields: &HashMap<String, Option<String>>) -> bool {
+    let has_id = fields.get("id").and_then(|v| v.as_ref()).is_some();
+    let has_channel_id = fields.get("channel_id").and_then(|v| v.as_ref()).is_some();
+    let has_title = fields.get("title").and_then(|v| v.as_ref()).is_some();
+
+    // If it has channel_id, it's metadata - require channel_id and title
+    if fields.contains_key("channel_id") {
+        return !has_channel_id || !has_title;
+    }
+
+    // Otherwise it's discovery - require id
+    !has_id
 }
 
 /**
@@ -404,5 +546,75 @@ mod tests {
             &Some("Channel Two".to_string())
         );
         assert_eq!(result[1].get("image").unwrap(), &None);
+    }
+
+    #[test]
+    fn test_extract_nested_with_parent() {
+        let mut each = HashMap::new();
+        each.insert("channel_id".to_string(), "$parent.id".to_string());
+        each.insert("title".to_string(), "$.title".to_string());
+        each.insert("start_time".to_string(), "$.startTime".to_string());
+
+        let extractor = Extractor {
+            kind: ExtractorKind::JsonPathArray,
+            path: Some("$.result[*].content.epg[*]".to_string()),
+            regex: None,
+            each: Some(each),
+        };
+
+        let content = r#"{
+            "result": [
+                {
+                    "id": "channel1",
+                    "content": {
+                        "epg": [
+                            {"title": "Show A", "startTime": "2026-01-01T00:00:00Z"},
+                            {"title": "Show B", "startTime": "2026-01-01T01:00:00Z"}
+                        ]
+                    }
+                },
+                {
+                    "id": "channel2",
+                    "content": {
+                        "epg": [
+                            {"title": "Show C", "startTime": "2026-01-01T00:00:00Z"}
+                        ]
+                    }
+                }
+            ]
+        }"#;
+
+        let result = extract_array(&extractor, content).unwrap();
+
+        // Should have 3 programmes total
+        assert_eq!(result.len(), 3);
+
+        // First programme from channel1
+        assert_eq!(
+            result[0].get("channel_id").unwrap(),
+            &Some("channel1".to_string())
+        );
+        assert_eq!(result[0].get("title").unwrap(), &Some("Show A".to_string()));
+
+        // Second programme from channel1
+        assert_eq!(
+            result[1].get("channel_id").unwrap(),
+            &Some("channel1".to_string())
+        );
+        assert_eq!(result[1].get("title").unwrap(), &Some("Show B".to_string()));
+
+        // Programme from channel2
+        assert_eq!(
+            result[2].get("channel_id").unwrap(),
+            &Some("channel2".to_string())
+        );
+        assert_eq!(result[2].get("title").unwrap(), &Some("Show C".to_string()));
+    }
+
+    #[test]
+    fn test_split_nested_path() {
+        let (parent, child) = split_nested_path("$.result[*].content.epg[*]").unwrap();
+        assert_eq!(parent, "$.result[*]");
+        assert_eq!(child, "$.content.epg[*]");
     }
 }

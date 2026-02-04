@@ -375,22 +375,89 @@ async fn source_epg(
             icon = icon_element,
         ));
 
-        // Generate 7 days of programming
-        for day in 0..7 {
-            let day_start = start + Duration::days(day);
-            let day_end = day_start + Duration::days(1);
+        // Use real programme data if available, otherwise generate placeholder
+        if entry.programmes.is_empty() {
+            // Generate 7 days of placeholder programming
+            for day in 0..7 {
+                let day_start = start + Duration::days(day);
+                let day_end = day_start + Duration::days(1);
 
-            programmes.push_str(&format!(
-                "  <programme start=\"{start}\" stop=\"{stop}\" channel=\"{id}\">\n\
-                 \x20   <title{lang}>{name}</title>\n\
-                 \x20   <desc{lang}>Live broadcast</desc>\n\
-                 \x20 </programme>\n",
-                start = day_start.format("%Y%m%d%H%M%S %z"),
-                stop = day_end.format("%Y%m%d%H%M%S %z"),
-                id = escape_xml(&channel_id),
-                name = escape_xml(channel_name),
-                lang = lang_attr,
-            ));
+                programmes.push_str(&format!(
+                    "  <programme start=\"{start}\" stop=\"{stop}\" channel=\"{id}\">\n\
+                     \x20   <title{lang}>{name}</title>\n\
+                     \x20   <desc{lang}>Live broadcast</desc>\n\
+                     \x20 </programme>\n",
+                    start = day_start.format("%Y%m%d%H%M%S %z"),
+                    stop = day_end.format("%Y%m%d%H%M%S %z"),
+                    id = escape_xml(&channel_id),
+                    name = escape_xml(channel_name),
+                    lang = lang_attr,
+                ));
+            }
+        } else {
+            // Use real programme data from metadata phase
+            for programme in &entry.programmes {
+                // Parse ISO 8601 timestamps and convert to XMLTV format
+                let start_formatted = format_xmltv_time(&programme.start_time);
+                let stop_formatted = format_xmltv_time(&programme.end_time);
+
+                // Build description element
+                let desc_element = programme
+                    .description
+                    .as_ref()
+                    .map(|d| format!("    <desc{}>{}</desc>\n", lang_attr, escape_xml(d)))
+                    .unwrap_or_default();
+
+                // Build category elements
+                let category_elements: String = programme
+                    .genres
+                    .iter()
+                    .map(|g| format!("    <category{}>{}</category>\n", lang_attr, escape_xml(g)))
+                    .collect();
+
+                // Build episode-num element if available
+                let episode_element = match (&programme.season, &programme.episode) {
+                    (Some(s), Some(e)) => {
+                        format!(
+                            "    <episode-num system=\"onscreen\">S{}E{}</episode-num>\n",
+                            s, e
+                        )
+                    }
+                    (None, Some(e)) => {
+                        format!(
+                            "    <episode-num system=\"onscreen\">E{}</episode-num>\n",
+                            e
+                        )
+                    }
+                    _ => String::new(),
+                };
+
+                // Build icon element if programme has image
+                let prog_icon = programme
+                    .image
+                    .as_ref()
+                    .map(|url| format!("    <icon src=\"{}\"/>\n", escape_xml(url)))
+                    .unwrap_or_default();
+
+                programmes.push_str(&format!(
+                    "  <programme start=\"{start}\" stop=\"{stop}\" channel=\"{id}\">\n\
+                     \x20   <title{lang}>{title}</title>\n\
+                     {desc}\
+                     {categories}\
+                     {episode}\
+                     {icon}\
+                     \x20 </programme>\n",
+                    start = start_formatted,
+                    stop = stop_formatted,
+                    id = escape_xml(&channel_id),
+                    title = escape_xml(&programme.title),
+                    lang = lang_attr,
+                    desc = desc_element,
+                    categories = category_elements,
+                    episode = episode_element,
+                    icon = prog_icon,
+                ));
+            }
         }
     }
 
@@ -645,6 +712,19 @@ fn escape_xml(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+/**
+    Convert ISO 8601 timestamp to XMLTV format (YYYYMMDDHHmmSS +0000).
+*/
+fn format_xmltv_time(iso_time: &str) -> String {
+    // Try to parse ISO 8601 format (e.g., "2026-02-04T00:00:00.000Z")
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso_time) {
+        dt.format("%Y%m%d%H%M%S %z").to_string()
+    } else {
+        // Fallback: return as-is if parsing fails
+        iso_time.to_string()
+    }
 }
 
 /**

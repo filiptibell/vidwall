@@ -6,11 +6,13 @@ mod discovery;
 mod executor;
 mod extractors;
 mod interpolate;
+mod metadata;
 mod types;
 
 pub use content::execute_content;
 pub use discovery::execute_discovery;
-pub use types::{ChannelEntry, DiscoveredChannel, Manifest, StreamInfo};
+pub use metadata::execute_metadata;
+pub use types::{ChannelEntry, DiscoveredChannel, Manifest, Programme, StreamInfo};
 
 /**
     Embedded channel manifests directory.

@@ -44,6 +44,35 @@ filter:
     - "RCN Señal en Vivo"
     - "Señal Principal"
 
+# Metadata phase: extract EPG data for all channels
+
+metadata:
+  outputs:
+    programmes: "${{get_epg.programmes}}"
+    expires_in: 3600 # Refresh EPG hourly
+
+  steps:
+    - name: "go_to_livetv"
+      kind: Navigate
+      url: "https://www.canalrcn.com/co/tv-en-vivo"
+
+    - name: "get_epg"
+      kind: Sniff
+      request:
+        url: "unity\\.tbxapis\\.com.*/items/.*_coco_p0_es\\.json"
+        method: GET
+      extract:
+        programmes:
+          kind: jsonpath_array
+          path: "$.result[*].content.epg[*]"
+          each:
+            channel_id: "$parent.id"
+            title: "$.title"
+            description: "$.description"
+            start_time: "$.startTime"
+            end_time: "$.endTime"
+            image: "$.images[?(@.type=='THUMB')].url"
+
 # Content phase: for each channel, navigate to player and extract stream info
 
 content:
