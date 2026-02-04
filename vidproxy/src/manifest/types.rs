@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-/// A channel manifest defining how to discover and extract stream credentials.
+/**
+    A channel manifest defining how to discover and extract stream credentials.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Manifest {
     pub channel: Channel,
@@ -10,7 +12,9 @@ pub struct Manifest {
     pub outputs: Outputs,
 }
 
-/// Channel metadata.
+/**
+    Channel metadata.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Channel {
     /// Display name for the channel
@@ -20,7 +24,9 @@ pub struct Channel {
     pub proxy: Option<String>,
 }
 
-/// A step in the discovery process.
+/**
+    A step in the discovery process.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Step {
     /// Unique name for this step (used in interpolation)
@@ -47,7 +53,9 @@ pub struct Step {
     pub extract: HashMap<String, Extractor>,
 }
 
-/// Wait condition after navigation.
+/**
+    Wait condition after navigation.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WaitCondition {
     /// Wait for a CSS selector to appear
@@ -61,7 +69,9 @@ pub struct WaitCondition {
     pub delay: Option<f64>,
 }
 
-/// The kind of step.
+/**
+    The kind of step.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub enum StepKind {
     /// Navigate browser to a URL
@@ -72,7 +82,9 @@ pub enum StepKind {
     CdrmRequest,
 }
 
-/// Request matching criteria for Sniff steps.
+/**
+    Request matching criteria for Sniff steps.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RequestMatch {
     /// URL regex pattern
@@ -85,7 +97,9 @@ pub struct RequestMatch {
     pub timeout: Option<f64>,
 }
 
-/// An extractor that pulls data from a response.
+/**
+    An extractor that pulls data from a response.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Extractor {
     /// The kind of extractor
@@ -95,7 +109,9 @@ pub struct Extractor {
     pub path: Option<String>,
 }
 
-/// The kind of extractor.
+/**
+    The kind of extractor.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ExtractorKind {
@@ -113,7 +129,9 @@ pub enum ExtractorKind {
     Pssh,
 }
 
-/// Final outputs from manifest execution.
+/**
+    Final outputs from manifest execution.
+*/
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Outputs {
     /// Optional channel name override (supports interpolation, defaults to channel.name)
@@ -128,7 +146,9 @@ pub struct Outputs {
     pub thumbnail_url: Option<String>,
 }
 
-/// Resolved outputs after execution.
+/**
+    Resolved outputs after execution.
+*/
 #[derive(Debug, Clone)]
 pub struct ManifestOutputs {
     pub channel_name: String,

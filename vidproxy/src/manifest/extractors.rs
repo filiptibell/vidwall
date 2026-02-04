@@ -3,7 +3,9 @@ use regex::Regex;
 
 use super::types::{Extractor, ExtractorKind};
 
-/// Run an extractor on the given content.
+/**
+    Run an extractor on the given content.
+*/
 pub fn extract(extractor: &Extractor, content: &str, url: &str) -> Result<String> {
     match extractor.kind {
         ExtractorKind::Url => Ok(url.to_string()),
@@ -15,7 +17,9 @@ pub fn extract(extractor: &Extractor, content: &str, url: &str) -> Result<String
     }
 }
 
-/// Extract using JSONPath.
+/**
+    Extract using JSONPath.
+*/
 fn extract_jsonpath(extractor: &Extractor, content: &str) -> Result<String> {
     use jsonpath_rust::JsonPath;
     use std::str::FromStr;
@@ -47,7 +51,9 @@ fn extract_jsonpath(extractor: &Extractor, content: &str) -> Result<String> {
     }
 }
 
-/// Extract using XPath.
+/**
+    Extract using XPath.
+*/
 fn extract_xpath(extractor: &Extractor, content: &str) -> Result<String> {
     let path = extractor
         .path
@@ -84,7 +90,9 @@ fn extract_xpath(extractor: &Extractor, content: &str) -> Result<String> {
     }
 }
 
-/// Extract using regex with capture group.
+/**
+    Extract using regex with capture group.
+*/
 fn extract_regex(extractor: &Extractor, content: &str) -> Result<String> {
     let pattern = extractor
         .path
@@ -105,7 +113,9 @@ fn extract_regex(extractor: &Extractor, content: &str) -> Result<String> {
     }
 }
 
-/// Extract first line containing ":".
+/**
+    Extract first line containing ":".
+*/
 fn extract_line(content: &str) -> Result<String> {
     content
         .lines()
@@ -114,7 +124,9 @@ fn extract_line(content: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("No line containing ':' found"))
 }
 
-/// Extract Widevine PSSH from MPD manifest using ffmpeg-source DASH parser.
+/**
+    Extract Widevine PSSH from MPD manifest using ffmpeg-source DASH parser.
+*/
 fn extract_pssh(content: &str, url: &str) -> Result<String> {
     use ffmpeg_source::reader::stream::StreamFormat;
     use ffmpeg_source::reader::stream::dash::DashFormat;

@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use anyhow::{Result, anyhow};
 use regex::Regex;
 
-/// Context for variable interpolation, storing outputs from each step.
+/**
+    Context for variable interpolation, storing outputs from each step.
+*/
 #[derive(Debug, Default)]
 pub struct InterpolationContext {
     /// Map of step_name -> (output_name -> value)
@@ -15,7 +17,9 @@ impl InterpolationContext {
         Self::default()
     }
 
-    /// Add an output value for a step.
+    /**
+        Add an output value for a step.
+    */
     pub fn set(&mut self, step_name: &str, output_name: &str, value: String) {
         self.steps
             .entry(step_name.to_string())
@@ -23,12 +27,16 @@ impl InterpolationContext {
             .insert(output_name.to_string(), value);
     }
 
-    /// Get an output value from a step.
+    /**
+        Get an output value from a step.
+    */
     pub fn get(&self, step_name: &str, output_name: &str) -> Option<&String> {
         self.steps.get(step_name)?.get(output_name)
     }
 
-    /// Interpolate a string, replacing `${{step_name.output_name}}` with values.
+    /**
+        Interpolate a string, replacing `${{step_name.output_name}}` with values.
+    */
     pub fn interpolate(&self, template: &str) -> Result<String> {
         let re = Regex::new(r"\$\{\{([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\}\}")?;
 
@@ -58,7 +66,9 @@ impl InterpolationContext {
         Ok(result)
     }
 
-    /// Check if a string contains any interpolation placeholders.
+    /**
+        Check if a string contains any interpolation placeholders.
+    */
     #[allow(dead_code)]
     pub fn has_placeholders(s: &str) -> bool {
         s.contains("${{")

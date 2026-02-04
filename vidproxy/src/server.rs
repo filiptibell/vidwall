@@ -56,7 +56,9 @@ async fn channels_m3u(State(state): State<AppState>, headers: HeaderMap) -> impl
     ([(header::CONTENT_TYPE, "audio/x-mpegurl")], playlist)
 }
 
-/// Generate XMLTV EPG data for 24/7 live channels
+/**
+    Generate XMLTV EPG data for 24/7 live channels
+*/
 async fn epg_xml(State(state): State<AppState>) -> impl IntoResponse {
     let stream_info = state.stream_info_rx.borrow();
     let channel_name = stream_info

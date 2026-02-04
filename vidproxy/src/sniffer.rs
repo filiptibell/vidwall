@@ -7,7 +7,9 @@ use tokio::sync::watch;
 use crate::manifest::{self, Manifest};
 use crate::stream_info::{StreamInfo, StreamInfoSender};
 
-/// DRM sniffer that discovers stream info using Chrome browser automation.
+/**
+    DRM sniffer that discovers stream info using Chrome browser automation.
+*/
 pub struct DrmSniffer {
     manifest: Manifest,
     headless: bool,
@@ -23,8 +25,10 @@ impl DrmSniffer {
         }
     }
 
-    /// Run the sniffer loop. Discovers credentials and publishes them.
-    /// Re-discovers when refresh is requested.
+    /**
+        Run the sniffer loop. Discovers credentials and publishes them.
+        Re-discovers when refresh is requested.
+    */
     pub async fn run(
         &mut self,
         mut shutdown_rx: watch::Receiver<bool>,
@@ -88,8 +92,10 @@ impl DrmSniffer {
         Ok(())
     }
 
-    /// Discover stream info by executing the manifest.
-    /// Returns None if shutdown was requested during discovery.
+    /**
+        Discover stream info by executing the manifest.
+        Returns None if shutdown was requested during discovery.
+    */
     async fn discover_stream_info(
         &self,
         shutdown_rx: &mut watch::Receiver<bool>,

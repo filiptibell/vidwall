@@ -21,7 +21,9 @@ struct CdrmResponse {
     message: String,
 }
 
-/// Execute a manifest using the given browser.
+/**
+    Execute a manifest using the given browser.
+*/
 pub async fn execute(manifest: &Manifest, browser: &ChromeBrowser) -> Result<ManifestOutputs> {
     let tab = browser
         .get_tab(0)
@@ -71,7 +73,9 @@ pub async fn execute(manifest: &Manifest, browser: &ChromeBrowser) -> Result<Man
     })
 }
 
-/// Execute a Navigate step.
+/**
+    Execute a Navigate step.
+*/
 async fn execute_navigate(
     step: &Step,
     tab: &ChromeBrowserTab,
@@ -105,7 +109,9 @@ async fn execute_navigate(
     Ok(())
 }
 
-/// Execute a Sniff step.
+/**
+    Execute a Sniff step.
+*/
 async fn execute_sniff(
     step: &Step,
     requests: &mut NetworkRequestStream,
@@ -207,7 +213,9 @@ async fn execute_sniff(
     }
 }
 
-/// Execute a CdrmRequest step.
+/**
+    Execute a CdrmRequest step.
+*/
 async fn execute_cdrm_request(
     step: &Step,
     _channel_name: &str,

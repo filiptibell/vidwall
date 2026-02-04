@@ -1,18 +1,22 @@
+use anyhow::{Result, anyhow};
+use include_dir::{Dir, include_dir};
+
 mod executor;
 mod extractors;
 mod interpolate;
 mod types;
 
-use anyhow::{Result, anyhow};
-use include_dir::{Dir, include_dir};
-
 pub use executor::execute;
 pub use types::Manifest;
 
-/// Embedded channel manifests directory.
+/**
+    Embedded channel manifests directory.
+*/
 static CHANNELS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/channels");
 
-/// Load all available channel manifests.
+/**
+    Load all available channel manifests.
+*/
 pub fn load_all() -> Result<Vec<Manifest>> {
     let mut manifests = Vec::new();
 
@@ -37,7 +41,9 @@ pub fn load_all() -> Result<Vec<Manifest>> {
     Ok(manifests)
 }
 
-/// Find a channel manifest by name (case-insensitive, partial match).
+/**
+    Find a channel manifest by name (case-insensitive, partial match).
+*/
 pub fn find_by_name(name: &str) -> Result<Manifest> {
     let manifests = load_all()?;
     let name_lower = name.to_lowercase();
@@ -78,7 +84,9 @@ pub fn find_by_name(name: &str) -> Result<Manifest> {
     Err(anyhow!("Channel '{}' not found", name))
 }
 
-/// List all available channel names.
+/**
+    List all available channel names.
+*/
 pub fn list_channels() -> Result<Vec<String>> {
     let manifests = load_all()?;
     Ok(manifests.into_iter().map(|m| m.channel.name).collect())
