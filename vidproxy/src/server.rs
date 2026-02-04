@@ -392,6 +392,13 @@ async fn source_epg(
 
         // Use real programme data if available, otherwise generate placeholder
         if entry.programmes.is_empty() {
+            // Use channel description if available, otherwise default
+            let desc = entry
+                .channel
+                .description
+                .as_deref()
+                .unwrap_or("Live broadcast");
+
             // Generate 7 days of placeholder programming
             for day in 0..7 {
                 let day_start = start + Duration::days(day);
@@ -400,7 +407,7 @@ async fn source_epg(
                 programmes.push_str(&format!(
                     "  <programme start=\"{start}\" stop=\"{stop}\" channel=\"{id}\">\n\
                      \x20   <title{lang}>{name}</title>\n\
-                     \x20   <desc{lang}>Live broadcast</desc>\n\
+                     \x20   <desc{lang}>{desc}</desc>\n\
                      {category}\
                      \x20 </programme>\n",
                     start = day_start.format("%Y%m%d%H%M%S %z"),
@@ -408,6 +415,7 @@ async fn source_epg(
                     id = escape_xml(&channel_id),
                     category = category_element,
                     name = escape_xml(channel_name),
+                    desc = escape_xml(desc),
                     lang = lang_attr,
                 ));
             }
