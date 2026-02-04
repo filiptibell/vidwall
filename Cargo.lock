@@ -2014,7 +2014,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-decode"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=6d4342096b01ebe7e1906b9509740c2222fab811#6d4342096b01ebe7e1906b9509740c2222fab811"
+source = "git+https://github.com/tibellium/crates?rev=8889911f71b4734e7b2cbdb035a1b55496c0cfcc#8889911f71b4734e7b2cbdb035a1b55496c0cfcc"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-source",
@@ -2035,7 +2035,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-sink"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=6d4342096b01ebe7e1906b9509740c2222fab811#6d4342096b01ebe7e1906b9509740c2222fab811"
+source = "git+https://github.com/tibellium/crates?rev=8889911f71b4734e7b2cbdb035a1b55496c0cfcc#8889911f71b4734e7b2cbdb035a1b55496c0cfcc"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-types",
@@ -2044,7 +2044,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-source"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=6d4342096b01ebe7e1906b9509740c2222fab811#6d4342096b01ebe7e1906b9509740c2222fab811"
+source = "git+https://github.com/tibellium/crates?rev=8889911f71b4734e7b2cbdb035a1b55496c0cfcc#8889911f71b4734e7b2cbdb035a1b55496c0cfcc"
 dependencies = [
  "aes",
  "bytecount",
@@ -2077,7 +2077,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-transform"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=6d4342096b01ebe7e1906b9509740c2222fab811#6d4342096b01ebe7e1906b9509740c2222fab811"
+source = "git+https://github.com/tibellium/crates?rev=8889911f71b4734e7b2cbdb035a1b55496c0cfcc#8889911f71b4734e7b2cbdb035a1b55496c0cfcc"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-types",
@@ -2086,7 +2086,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-types"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=6d4342096b01ebe7e1906b9509740c2222fab811#6d4342096b01ebe7e1906b9509740c2222fab811"
+source = "git+https://github.com/tibellium/crates?rev=8889911f71b4734e7b2cbdb035a1b55496c0cfcc#8889911f71b4734e7b2cbdb035a1b55496c0cfcc"
 dependencies = [
  "static_assertions",
 ]
@@ -2474,6 +2474,12 @@ name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
+name = "glob-match"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9985c9503b412198aa4197559e9a318524ebc4519c229bfa05a535828c950b9d"
 
 [[package]]
 name = "globset"
@@ -3228,7 +3234,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
 dependencies = [
  "byteorder-lite",
- "quick-error",
+ "quick-error 2.0.1",
 ]
 
 [[package]]
@@ -3242,6 +3248,25 @@ name = "imgref"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
+
+[[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
 
 [[package]]
 name = "indexmap"
@@ -3422,6 +3447,19 @@ checksum = "8c942ebf8e95485ca0d52d97da7c5a2c387d0e7f0ba4c35e93bfcaee045955b3"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jsonpath-rust"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c00ae348f9f8fd2d09f82a98ca381c60df9e0820d8d79fce43e649b4dc3128b"
+dependencies = [
+ "pest",
+ "pest_derive",
+ "regex",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4441,6 +4479,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "peresil"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f658886ed52e196e850cfbbfddab9eaa7f6d90dd0929e264c31e5cec07e09e57"
+
+[[package]]
+name = "pest"
+version = "2.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9eb05c21a464ea704b53158d358a31e6425db2f63a1a7312268b05fe2b75f7"
+dependencies = [
+ "memchr",
+ "ucd-trie",
+]
+
+[[package]]
+name = "pest_derive"
+version = "2.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68f9dbced329c441fa79d80472764b1a2c7e57123553b8519b36663a2fb234ed"
+dependencies = [
+ "pest",
+ "pest_generator",
+]
+
+[[package]]
+name = "pest_generator"
+version = "2.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bb96d5051a78f44f43c8f712d8e810adb0ebf923fc9ed2655a7f66f63ba8ee5"
+dependencies = [
+ "pest",
+ "pest_meta",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
+name = "pest_meta"
+version = "2.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "602113b5b5e8621770cfd490cfd90b9f84ab29bd2b0e49ad83eb6d186cef2365"
+dependencies = [
+ "pest",
+ "sha2",
+]
+
+[[package]]
 name = "pico-args"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4696,6 +4783,12 @@ dependencies = [
 
 [[package]]
 name = "quick-error"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
+
+[[package]]
+name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
@@ -4908,7 +5001,7 @@ dependencies = [
  "avif-serialize",
  "imgref",
  "loop9",
- "quick-error",
+ "quick-error 2.0.1",
  "rav1e",
  "rayon",
  "rgb",
@@ -5701,6 +5794,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap 2.13.0",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6072,6 +6178,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sxd-document"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94d82f37be9faf1b10a82c4bd492b74f698e40082f0f40de38ab275f31d42078"
+dependencies = [
+ "peresil",
+ "typed-arena",
+]
+
+[[package]]
+name = "sxd-xpath"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36e39da5d30887b5690e29de4c5ebb8ddff64ebd9933f98a01daaa4fd11b36ea"
+dependencies = [
+ "peresil",
+ "quick-error 1.2.3",
+ "sxd-document",
+]
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6280,7 +6407,7 @@ dependencies = [
  "fax",
  "flate2",
  "half",
- "quick-error",
+ "quick-error 2.0.1",
  "weezl",
  "zune-jpeg 0.4.21",
 ]
@@ -6698,6 +6825,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-arena"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9b2228007eba4120145f785df0f6c92ea538f5a3635a612ecf4e334c8c1446d"
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6708,6 +6841,12 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
+
+[[package]]
+name = "ucd-trie"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
 
 [[package]]
 name = "uds_windows"
@@ -6797,6 +6936,12 @@ name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"
@@ -6967,9 +7112,16 @@ dependencies = [
  "ffmpeg-sink",
  "ffmpeg-source",
  "ffmpeg-types",
+ "glob-match",
+ "include_dir",
+ "jsonpath-rust",
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "sxd-document",
+ "sxd-xpath",
  "tempfile",
  "tokio",
  "tokio-stream",

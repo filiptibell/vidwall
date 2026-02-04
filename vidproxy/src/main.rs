@@ -7,6 +7,7 @@ use tokio::{signal, sync::watch};
 
 mod coordinator;
 mod credentials;
+mod manifest;
 mod proxy;
 mod segments;
 mod server;
@@ -16,25 +17,21 @@ mod sniffer;
 #[command(name = "vidproxy")]
 #[command(about = "HLS remuxing proxy with automatic DRM key extraction")]
 struct Args {
-    /// Target site URL
-    #[arg(long, default_value = "https://www.canalrcn.com")]
-    site_url: String,
+    /// Channel to stream (by name or filename)
+    #[arg(short = 'C', long)]
+    channel: Option<String>,
 
-    /// Content title to search for
-    #[arg(long, default_value = "Señal Principal")]
-    content_title: String,
-
-    /// SOCKS5 proxy for Chrome (e.g., "socks5://127.0.0.1:1080")
+    /// List available channels and exit
     #[arg(long)]
-    chrome_proxy: Option<String>,
+    list_channels: bool,
+
+    /// Override proxy from manifest
+    #[arg(long)]
+    proxy: Option<String>,
 
     /// Run Chrome in headless mode
     #[arg(long)]
     headless: bool,
-
-    /// CDRM API URL for key extraction
-    #[arg(long, default_value = "https://cdrm-project.com/api/decrypt")]
-    cdrm_api: String,
 
     /// HTTP server port
     #[arg(short, long, default_value = "8080")]
@@ -47,15 +44,31 @@ struct Args {
     /// Segment duration in seconds
     #[arg(short = 'd', long, default_value = "4")]
     segment_duration: u64,
-
-    /// Channel name for IPTV playlist
-    #[arg(short = 'c', long, default_value = "Live TV")]
-    channel_name: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    // Handle --list-channels
+    if args.list_channels {
+        println!("Available channels:");
+        for name in manifest::list_channels()? {
+            println!("  - {}", name);
+        }
+        return Ok(());
+    }
+
+    // Load manifest
+    let channel_name = args.channel.as_deref().unwrap_or("Canal RCN");
+    let mut channel_manifest = manifest::find_by_name(channel_name)?;
+
+    // Override proxy if specified
+    if args.proxy.is_some() {
+        channel_manifest.channel.proxy = args.proxy.clone();
+    }
+
+    let display_name = channel_manifest.channel.name.clone();
 
     // Create segment manager with temp directory
     let segment_manager = Arc::new(segments::SegmentManager::new(args.segment_count)?);
@@ -68,41 +81,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
     let server_shutdown_rx = shutdown_rx.clone();
     let server_segment_manager = segment_manager.clone();
-    let channel_name = args.channel_name.clone();
+    let server_channel_name = display_name.clone();
 
     let server_handle = tokio::spawn(async move {
         server::run_server(
             addr,
             server_segment_manager,
             server_shutdown_rx,
-            &channel_name,
+            &server_channel_name,
         )
         .await
     });
 
-    println!(
-        "Discovering stream from {} -> http://localhost:{}/playlist.m3u8",
-        args.site_url, args.port
-    );
+    println!("Channel: {}", display_name);
+    println!("Stream: http://localhost:{}/playlist.m3u8", args.port);
     println!("IPTV playlist: http://localhost:{}/channels.m3u", args.port);
 
     // Create channels for coordination
     let (credentials_tx, credentials_rx) = credentials::credentials_channel();
     let (refresh_tx, refresh_rx) = coordinator::refresh_channel();
 
-    // Configure sniffer
-    let sniffer_config = sniffer::SnifferConfig {
-        site_url: args.site_url,
-        content_title: args.content_title,
-        proxy_server: args.chrome_proxy,
-        headless: args.headless,
-        cdrm_api_url: args.cdrm_api,
-    };
-
     // Start sniffer task
     let sniffer_shutdown_rx = shutdown_rx.clone();
+    let sniffer_manifest = channel_manifest.clone();
+    let sniffer_headless = args.headless;
+
     let sniffer_handle = tokio::spawn(async move {
-        let mut sniffer = sniffer::DrmSniffer::new(sniffer_config, credentials_tx);
+        let mut sniffer =
+            sniffer::DrmSniffer::new(sniffer_manifest, sniffer_headless, credentials_tx);
         if let Err(e) = sniffer.run(sniffer_shutdown_rx, refresh_rx).await {
             eprintln!("[sniffer] Error: {}", e);
         }
@@ -113,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let segment_duration = Duration::from_secs(args.segment_duration);
     let coord_segment_manager = segment_manager.clone();
     let coord_output_dir = output_dir.clone();
-    let coord_channel_name = args.channel_name.clone();
+    let coord_channel_name = display_name.clone();
 
     let coordinator_handle = tokio::spawn(async move {
         let mut coordinator = coordinator::Coordinator::new(
