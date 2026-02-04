@@ -57,19 +57,29 @@ struct AppState {
 }
 
 /**
-    Generate M3U playlist with all discovered channels.
+    Generate M3U playlist with channels from a specific source.
 */
-async fn channels_m3u(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+async fn channels_m3u(
+    State(state): State<AppState>,
+    Path(source_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, StatusCode> {
+    let channels = state.registry.list_by_source(&source_id);
+    if channels.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("localhost:8080");
 
-    let channels = state.registry.list_all();
+    let mut playlist = format!(
+        "#EXTM3U url-tvg=\"http://{}/{}/epg.xml\"\n",
+        host, source_id
+    );
 
-    let mut playlist = format!("#EXTM3U url-tvg=\"http://{}/epg.xml\"\n", host);
-
-    for (id, entry) in &channels {
+    for entry in &channels {
         // Skip channels without stream info
         if entry.stream_info.is_none() {
             continue;
@@ -84,30 +94,36 @@ async fn channels_m3u(State(state): State<AppState>, headers: HeaderMap) -> impl
             .map(|url| format!(" tvg-logo=\"{}\"", url))
             .unwrap_or_default();
 
-        let channel_id = format!("{}:{}", id.source, id.id);
-        let group = &entry.channel.source;
+        let channel_id = format!("{}:{}", source_id, entry.channel.id);
 
         playlist.push_str(&format!(
             "#EXTINF:-1 tvg-id=\"{id}\" tvg-name=\"{name}\" tvg-type=\"live\" group-title=\"{group}\"{logo},{name}\n\
-             http://{host}/stream/{source}/{channel}/playlist.m3u8\n",
+             http://{host}/{source}/{channel}/playlist.m3u8\n",
             id = escape_xml(&channel_id),
             name = escape_xml(channel_name),
-            group = escape_xml(group),
+            group = escape_xml(&source_id),
             logo = logo_attr,
             host = host,
-            source = id.source,
-            channel = id.id,
+            source = source_id,
+            channel = entry.channel.id,
         ));
     }
 
-    ([(header::CONTENT_TYPE, "audio/x-mpegurl")], playlist)
+    Ok(([(header::CONTENT_TYPE, "audio/x-mpegurl")], playlist))
 }
 
 /**
-    Generate XMLTV EPG data for all channels.
+    Generate XMLTV EPG data for channels from a specific source.
 */
-async fn epg_xml(State(state): State<AppState>) -> impl IntoResponse {
-    let channels = state.registry.list_all();
+async fn epg_xml(
+    State(state): State<AppState>,
+    Path(source_id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let channels = state.registry.list_by_source(&source_id);
+    if channels.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     let now = Utc::now();
     let start_of_day = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
     let start = start_of_day.and_utc();
@@ -115,13 +131,13 @@ async fn epg_xml(State(state): State<AppState>) -> impl IntoResponse {
     let mut channel_elements = String::new();
     let mut programmes = String::new();
 
-    for (id, entry) in &channels {
+    for entry in &channels {
         if entry.stream_info.is_none() {
             continue;
         }
 
         let channel_name = entry.channel.name.as_deref().unwrap_or(&entry.channel.id);
-        let channel_id = format!("{}:{}", id.source, id.id);
+        let channel_id = format!("{}:{}", source_id, entry.channel.id);
 
         let icon_element = entry
             .channel
@@ -169,7 +185,7 @@ async fn epg_xml(State(state): State<AppState>) -> impl IntoResponse {
         programmes = programmes,
     );
 
-    ([(header::CONTENT_TYPE, "application/xml")], xml)
+    Ok(([(header::CONTENT_TYPE, "application/xml")], xml))
 }
 
 /**
@@ -177,18 +193,18 @@ async fn epg_xml(State(state): State<AppState>) -> impl IntoResponse {
 */
 async fn stream_playlist(
     State(state): State<AppState>,
-    Path((source, channel_id)): Path<(String, String)>,
+    Path((source_id, channel_id)): Path<(String, String)>,
 ) -> Result<Response, StatusCode> {
-    let id = ChannelId::new(&source, &channel_id);
+    let id = ChannelId::new(&source_id, &channel_id);
 
     // Check if discovery has expired for this source - if so, re-run entire source
-    if state.registry.is_discovery_expired(&source) {
+    if state.registry.is_discovery_expired(&source_id) {
         println!(
             "[server] Discovery expired for source '{}', refreshing entire source...",
-            source
+            source_id
         );
 
-        if let Some(manifest) = state.manifest_store.get(&source).await {
+        if let Some(manifest) = state.manifest_store.get(&source_id).await {
             match source::run_source(&manifest, state.manifest_store.headless()).await {
                 Ok(result) => {
                     state.registry.register_source(
@@ -196,10 +212,10 @@ async fn stream_playlist(
                         result.channels,
                         result.discovery_expires_at,
                     );
-                    println!("[server] Refreshed source '{}'", source);
+                    println!("[server] Refreshed source '{}'", source_id);
                 }
                 Err(e) => {
-                    eprintln!("[server] Failed to refresh source '{}': {}", source, e);
+                    eprintln!("[server] Failed to refresh source '{}': {}", source_id, e);
                     // Continue with existing data
                 }
             }
@@ -231,8 +247,8 @@ async fn stream_playlist(
         }
 
         // Get manifest for this source
-        let manifest = state.manifest_store.get(&source).await.ok_or_else(|| {
-            eprintln!("[server] No manifest found for source '{}'", source);
+        let manifest = state.manifest_store.get(&source_id).await.ok_or_else(|| {
+            eprintln!("[server] No manifest found for source '{}'", source_id);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -327,9 +343,9 @@ async fn stream_playlist(
 */
 async fn stream_segment(
     State(state): State<AppState>,
-    Path((source, channel_id, filename)): Path<(String, String, String)>,
+    Path((source_id, channel_id, filename)): Path<(String, String, String)>,
 ) -> Result<Response, StatusCode> {
-    let id = ChannelId::new(&source, &channel_id);
+    let id = ChannelId::new(&source_id, &channel_id);
 
     let pipeline = state
         .pipeline_store
@@ -348,9 +364,9 @@ async fn stream_segment(
 */
 async fn channel_info(
     State(state): State<AppState>,
-    Path((source, channel_id)): Path<(String, String)>,
+    Path((source_id, channel_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let id = ChannelId::new(&source, &channel_id);
+    let id = ChannelId::new(&source_id, &channel_id);
 
     let entry = state.registry.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
@@ -358,7 +374,7 @@ async fn channel_info(
 
     let json = serde_json::json!({
         "id": id.to_string(),
-        "source": source,
+        "source": source_id,
         "channel_id": channel_id,
         "name": entry.channel.name,
         "image": entry.channel.image,
@@ -422,17 +438,14 @@ pub async fn run_server(
     };
 
     let app = Router::new()
-        .route("/channels.m3u", get(channels_m3u))
-        .route("/epg.xml", get(epg_xml))
-        .route("/stream/{source}/{channel_id}/info", get(channel_info))
+        .route("/{source_id}/channels.m3u", get(channels_m3u))
+        .route("/{source_id}/epg.xml", get(epg_xml))
+        .route("/{source_id}/{channel_id}/info", get(channel_info))
         .route(
-            "/stream/{source}/{channel_id}/playlist.m3u8",
+            "/{source_id}/{channel_id}/playlist.m3u8",
             get(stream_playlist),
         )
-        .route(
-            "/stream/{source}/{channel_id}/{filename}",
-            get(stream_segment),
-        )
+        .route("/{source_id}/{channel_id}/{filename}", get(stream_segment))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
