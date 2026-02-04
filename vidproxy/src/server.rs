@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use axum::{
     Router,
@@ -16,8 +17,46 @@ use tokio_util::io::ReaderStream;
 
 use crate::manifest::Manifest;
 use crate::pipeline::PipelineStore;
-use crate::registry::{ChannelId, ChannelRegistry};
+use crate::registry::{ChannelId, ChannelRegistry, SourceState};
 use crate::source;
+
+/// Default timeout for waiting on source discovery (60 seconds)
+const SOURCE_WAIT_TIMEOUT: StdDuration = StdDuration::from_secs(60);
+
+/**
+    Wait for a source to be ready, returning appropriate error if not.
+    - Returns Ok(()) if the source is ready
+    - Returns Err(NOT_FOUND) if the source doesn't exist
+    - Returns Err(SERVICE_UNAVAILABLE) if the source failed
+    - Returns Err(GATEWAY_TIMEOUT) if waiting timed out
+*/
+async fn wait_for_source_ready(
+    registry: &ChannelRegistry,
+    source_id: &str,
+) -> Result<(), StatusCode> {
+    match registry
+        .wait_for_source(source_id, SOURCE_WAIT_TIMEOUT)
+        .await
+    {
+        Some(SourceState::Ready) => Ok(()),
+        Some(SourceState::Failed(err)) => {
+            eprintln!("[server] Source '{}' failed: {}", source_id, err);
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+        Some(SourceState::Loading) => {
+            // Timed out while still loading
+            eprintln!(
+                "[server] Timeout waiting for source '{}' to load",
+                source_id
+            );
+            Err(StatusCode::GATEWAY_TIMEOUT)
+        }
+        None => {
+            // Unknown source
+            Err(StatusCode::NOT_FOUND)
+        }
+    }
+}
 
 /**
     Store for loaded manifests, keyed by source name
@@ -64,8 +103,12 @@ async fn channels_m3u(
     Path(source_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, StatusCode> {
+    // Wait for source to be ready
+    wait_for_source_ready(&state.registry, &source_id).await?;
+
     let channels = state.registry.list_by_source(&source_id);
     if channels.is_empty() {
+        // Source is ready but has no channels (all failed during content phase)
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -119,6 +162,9 @@ async fn epg_xml(
     State(state): State<AppState>,
     Path(source_id): Path<String>,
 ) -> Result<impl IntoResponse, StatusCode> {
+    // Wait for source to be ready
+    wait_for_source_ready(&state.registry, &source_id).await?;
+
     let channels = state.registry.list_by_source(&source_id);
     if channels.is_empty() {
         return Err(StatusCode::NOT_FOUND);
@@ -195,6 +241,9 @@ async fn stream_playlist(
     State(state): State<AppState>,
     Path((source_id, channel_id)): Path<(String, String)>,
 ) -> Result<Response, StatusCode> {
+    // Wait for source to be ready
+    wait_for_source_ready(&state.registry, &source_id).await?;
+
     let id = ChannelId::new(&source_id, &channel_id);
 
     // Check if discovery has expired for this source - if so, re-run entire source
@@ -366,6 +415,9 @@ async fn channel_info(
     State(state): State<AppState>,
     Path((source_id, channel_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, StatusCode> {
+    // Wait for source to be ready
+    wait_for_source_ready(&state.registry, &source_id).await?;
+
     let id = ChannelId::new(&source_id, &channel_id);
 
     let entry = state.registry.get(&id).ok_or(StatusCode::NOT_FOUND)?;

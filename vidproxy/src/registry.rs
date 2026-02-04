@@ -1,7 +1,29 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use tokio::sync::Notify;
 
 use crate::manifest::{ChannelEntry, StreamInfo};
+
+/**
+    State of a source's discovery process.
+*/
+#[derive(Debug, Clone)]
+pub enum SourceState {
+    /// Discovery is in progress
+    Loading,
+    /// Discovery completed successfully
+    Ready,
+    /// Discovery failed with an error
+    Failed(String),
+}
+
+impl SourceState {
+    pub fn is_loading(&self) -> bool {
+        matches!(self, SourceState::Loading)
+    }
+}
 
 /**
     Full channel ID combining source and channel ID.
@@ -45,6 +67,10 @@ pub struct ChannelRegistry {
     channels: RwLock<HashMap<ChannelId, ChannelEntry>>,
     /// When each source's discovery results expire
     discovery_expiration: RwLock<HashMap<String, Option<u64>>>,
+    /// Current state of each source (Loading, Ready, Failed)
+    source_state: RwLock<HashMap<String, SourceState>>,
+    /// Notification handles for waiters on each source
+    source_notify: RwLock<HashMap<String, Arc<Notify>>>,
 }
 
 impl ChannelRegistry {
@@ -52,11 +78,104 @@ impl ChannelRegistry {
         Self {
             channels: RwLock::new(HashMap::new()),
             discovery_expiration: RwLock::new(HashMap::new()),
+            source_state: RwLock::new(HashMap::new()),
+            source_notify: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /**
+        Mark a source as loading (discovery in progress).
+    */
+    pub fn mark_source_loading(&self, source_id: &str) {
+        let mut states = self.source_state.write().unwrap();
+        states.insert(source_id.to_string(), SourceState::Loading);
+
+        // Create notify handle if it doesn't exist
+        let mut notifies = self.source_notify.write().unwrap();
+        notifies
+            .entry(source_id.to_string())
+            .or_insert_with(|| Arc::new(Notify::new()));
+    }
+
+    /**
+        Mark a source as failed.
+    */
+    pub fn mark_source_failed(&self, source_id: &str, error: impl ToString) {
+        {
+            let mut states = self.source_state.write().unwrap();
+            states.insert(
+                source_id.to_string(),
+                SourceState::Failed(error.to_string()),
+            );
+        }
+
+        // Notify any waiters
+        let notifies = self.source_notify.read().unwrap();
+        if let Some(notify) = notifies.get(source_id) {
+            notify.notify_waiters();
+        }
+    }
+
+    /**
+        Get the current state of a source.
+    */
+    pub fn get_source_state(&self, source_id: &str) -> Option<SourceState> {
+        self.source_state.read().unwrap().get(source_id).cloned()
+    }
+
+    /**
+        Wait for a source to finish loading (with timeout).
+        Returns the final state (Ready or Failed), or None if timeout.
+    */
+    pub async fn wait_for_source(&self, source_id: &str, timeout: Duration) -> Option<SourceState> {
+        // Check current state first
+        let current_state = self.get_source_state(source_id);
+        match &current_state {
+            Some(SourceState::Loading) => {
+                // Need to wait
+            }
+            Some(state) => return Some(state.clone()),
+            None => return None, // Unknown source
+        }
+
+        // Get the notify handle
+        let notify = {
+            let notifies = self.source_notify.read().unwrap();
+            notifies.get(source_id).cloned()
+        };
+
+        let Some(notify) = notify else {
+            return current_state;
+        };
+
+        // Wait with timeout
+        let result = tokio::time::timeout(timeout, async {
+            loop {
+                notify.notified().await;
+                let state = self.get_source_state(source_id);
+                if let Some(ref s) = state {
+                    if !s.is_loading() {
+                        return state;
+                    }
+                } else {
+                    return state;
+                }
+            }
+        })
+        .await;
+
+        match result {
+            Ok(state) => state,
+            Err(_timeout) => {
+                // Return current state on timeout (might still be Loading)
+                self.get_source_state(source_id)
+            }
         }
     }
 
     /**
         Register channels from a source discovery result.
+        Also marks the source as Ready and notifies waiters.
     */
     pub fn register_source(
         &self,
@@ -64,20 +183,36 @@ impl ChannelRegistry {
         channels: Vec<ChannelEntry>,
         discovery_expires_at: Option<u64>,
     ) {
-        let mut registry = self.channels.write().unwrap();
+        {
+            let mut registry = self.channels.write().unwrap();
 
-        // Remove old channels from this source
-        registry.retain(|id, _| id.source != source_name);
+            // Remove old channels from this source
+            registry.retain(|id, _| id.source != source_name);
 
-        // Add new channels
-        for entry in channels {
-            let id = ChannelId::new(source_name, &entry.channel.id);
-            registry.insert(id, entry);
+            // Add new channels
+            for entry in channels {
+                let id = ChannelId::new(source_name, &entry.channel.id);
+                registry.insert(id, entry);
+            }
         }
 
         // Update discovery expiration
-        let mut expirations = self.discovery_expiration.write().unwrap();
-        expirations.insert(source_name.to_string(), discovery_expires_at);
+        {
+            let mut expirations = self.discovery_expiration.write().unwrap();
+            expirations.insert(source_name.to_string(), discovery_expires_at);
+        }
+
+        // Mark source as ready
+        {
+            let mut states = self.source_state.write().unwrap();
+            states.insert(source_name.to_string(), SourceState::Ready);
+        }
+
+        // Notify any waiters
+        let notifies = self.source_notify.read().unwrap();
+        if let Some(notify) = notifies.get(source_name) {
+            notify.notify_waiters();
+        }
     }
 
     /**

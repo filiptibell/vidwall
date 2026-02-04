@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create manifest store for refresh operations
     let manifest_store = Arc::new(ManifestStore::new(args.headless));
 
-    // Load and run all source manifests
+    // Load source manifests
     println!("Loading sources...");
     let manifests = manifest::load_all()?;
 
@@ -96,46 +96,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    for manifest in manifests {
-        println!(
-            "Running source: {} ({})",
-            manifest.source.name, manifest.source.id
-        );
-
-        match source::run_source(&manifest, args.headless).await {
-            Ok(result) => {
-                registry.register_source(
-                    &result.source_id,
-                    result.channels,
-                    result.discovery_expires_at,
-                );
-            }
-            Err(e) => {
-                eprintln!("Failed to run source '{}': {}", manifest.source.id, e);
-            }
-        }
-
-        // Store manifest for later refresh operations
-        manifest_store.add(manifest).await;
+    // Mark all sources as loading and store manifests
+    for manifest in &manifests {
+        println!("Source: {} ({})", manifest.source.name, manifest.source.id);
+        registry.mark_source_loading(&manifest.source.id);
+        manifest_store.add(manifest.clone()).await;
     }
 
-    let channel_count = registry.len();
-    if channel_count == 0 {
-        eprintln!("No channels discovered from any source");
-        return Ok(());
-    }
-
-    println!("Discovered {} channels total", channel_count);
-
-    // Start HTTP server
+    // Start HTTP server IMMEDIATELY (before discovery)
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
 
     println!();
     println!("HTTP server listening on http://localhost:{}", args.port);
-    println!(
-        "  Channels list: http://localhost:{}/channels.m3u",
-        args.port
-    );
+    println!("  Requests will wait for source discovery to complete");
     println!();
 
     let server_registry = Arc::clone(&registry);
@@ -156,6 +129,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("[server] Error: {}", e);
         }
     });
+
+    // Spawn discovery tasks in background
+    let headless = args.headless;
+    for manifest in manifests {
+        let registry = Arc::clone(&registry);
+        tokio::spawn(async move {
+            println!(
+                "[discovery] Starting source: {} ({})",
+                manifest.source.name, manifest.source.id
+            );
+
+            match source::run_source(&manifest, headless).await {
+                Ok(result) => {
+                    let channel_count = result.channels.len();
+                    registry.register_source(
+                        &result.source_id,
+                        result.channels,
+                        result.discovery_expires_at,
+                    );
+                    println!(
+                        "[discovery] Source '{}' ready: {} channels",
+                        manifest.source.id, channel_count
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[discovery] Source '{}' failed: {}", manifest.source.id, e);
+                    registry.mark_source_failed(&manifest.source.id, e.to_string());
+                }
+            }
+        });
+    }
 
     // Wait for Ctrl+C
     signal::ctrl_c().await?;
