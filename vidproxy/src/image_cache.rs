@@ -100,6 +100,10 @@ async fn fetch_image(url: &str, proxy: Option<&str>) -> Result<CachedImage> {
 
     let response = client
         .get(url)
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        )
         .send()
         .await
         .map_err(|e| anyhow!("Failed to fetch image: {}", e))?;
