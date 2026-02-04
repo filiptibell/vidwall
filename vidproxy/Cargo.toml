@@ -15,7 +15,8 @@ ffmpeg-source.workspace = true
 ffmpeg-sink.workspace = true
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "signal", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "signal", "sync", "time"] }
+tokio-stream = "0.1"
 
 # HTTP server
 axum = "0.8"
@@ -26,3 +27,11 @@ clap = { version = "4", features = ["derive"] }
 
 # Temp directory
 tempfile = "3"
+
+# DRM sniffer (Chrome automation + key extraction)
+chrome-browser = { git = "https://github.com/tibellium/crates", rev = "0c46e1c7dfc8fccbe7d43dcbd5c5db779dc6a5a1" }
+reqwest = { version = "0.12", features = ["json"] }
+base64 = "0.22"
+anyhow = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

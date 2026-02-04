@@ -6973,13 +6973,20 @@ dependencies = [
 name = "vidproxy"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "axum",
+ "base64",
+ "chrome-browser",
  "clap",
  "ffmpeg-sink",
  "ffmpeg-source",
  "ffmpeg-types",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tower-http",
 ]
 
