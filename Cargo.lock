@@ -7115,6 +7115,7 @@ dependencies = [
  "ffmpeg-sink",
  "ffmpeg-source",
  "ffmpeg-types",
+ "futures",
  "glob-match",
  "include_dir",
  "jsonpath-rust",

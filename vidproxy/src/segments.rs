@@ -3,36 +3,34 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use tempfile::TempDir;
-
 /**
-    Manages HLS segments in a temporary directory.
+    Manages HLS segments in a directory.
     Handles cleanup of old segments to prevent unbounded disk usage.
 */
 pub struct SegmentManager {
-    temp_dir: TempDir,
+    output_dir: PathBuf,
     max_segments: usize,
     segments: Mutex<VecDeque<String>>,
 }
 
 impl SegmentManager {
     /**
-        Create a new segment manager with a temp directory.
+        Create a new segment manager for the given directory.
     */
-    pub fn new(max_segments: usize) -> std::io::Result<Self> {
-        let temp_dir = TempDir::new()?;
-        Ok(Self {
-            temp_dir,
+    pub fn new(output_dir: PathBuf, max_segments: usize) -> Self {
+        Self {
+            output_dir,
             max_segments,
             segments: Mutex::new(VecDeque::new()),
-        })
+        }
     }
 
     /**
         Get the output directory path.
     */
+    #[allow(dead_code)]
     pub fn output_dir(&self) -> &Path {
-        self.temp_dir.path()
+        &self.output_dir
     }
 
     /**
@@ -48,7 +46,7 @@ impl SegmentManager {
         // Remove old segments if over limit
         while segments.len() > self.max_segments {
             if let Some(old_segment) = segments.pop_front() {
-                let path = self.temp_dir.path().join(&old_segment);
+                let path = self.output_dir.join(&old_segment);
                 let _ = fs::remove_file(path);
             }
         }
@@ -59,7 +57,7 @@ impl SegmentManager {
         Call this periodically to detect segments written by FFmpeg.
     */
     pub fn scan_for_new_segments(&self) {
-        let dir = self.temp_dir.path();
+        let dir = &self.output_dir;
         let Ok(entries) = fs::read_dir(dir) else {
             return;
         };
@@ -100,7 +98,7 @@ impl SegmentManager {
     */
     #[allow(dead_code)]
     pub fn playlist_path(&self) -> PathBuf {
-        self.temp_dir.path().join("playlist.m3u8")
+        self.output_dir.join("playlist.m3u8")
     }
 
     /**
@@ -115,7 +113,7 @@ impl SegmentManager {
     */
     pub fn clear(&self) {
         let mut segments = self.segments.lock().unwrap();
-        let dir = self.temp_dir.path();
+        let dir = &self.output_dir;
 
         // Remove segment files
         for segment in segments.drain(..) {

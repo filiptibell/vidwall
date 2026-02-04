@@ -15,7 +15,9 @@ struct CdrmResponse {
     message: String,
 }
 
-/// Extract PSSH from an MPD manifest
+/**
+    Extract PSSH from an MPD manifest
+*/
 pub fn extract_pssh_from_mpd(mpd_url: &str, mpd_content: &str) -> Result<String> {
     use ffmpeg_source::reader::stream::StreamFormat;
     use ffmpeg_source::reader::stream::dash::DashFormat;
@@ -37,7 +39,9 @@ pub fn extract_pssh_from_mpd(mpd_url: &str, mpd_content: &str) -> Result<String>
     Ok(pssh.clone())
 }
 
-/// Fetch decryption key from CDRM API
+/**
+    Fetch decryption key from CDRM API
+*/
 pub async fn fetch_decryption_key(pssh: &str, license_url: &str) -> Result<String> {
     println!("[cdrm] Requesting decryption key from CDRM API...");
 
@@ -77,7 +81,9 @@ pub async fn fetch_decryption_key(pssh: &str, license_url: &str) -> Result<Strin
     Ok(key)
 }
 
-/// Fetch MPD content and extract PSSH, then get decryption key
+/**
+    Fetch MPD content and extract PSSH, then get decryption key
+*/
 pub async fn get_decryption_key(mpd_url: &str, license_url: &str) -> Result<String> {
     println!("[cdrm] Fetching MPD to extract PSSH...");
 

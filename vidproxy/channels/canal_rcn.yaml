@@ -1,58 +1,77 @@
-channel:
+source:
+  id: "canal_rcn"
   name: "Canal RCN"
   proxy: "socks5://127.0.0.1:1080"
 
-steps:
-  - name: "go_home"
-    kind: Navigate
-    url: "https://www.canalrcn.com"
-    wait_for:
-      function: "localStorage.getItem('persist:tbx') && localStorage.getItem('persist:tbx').includes('access_token')"
-      delay: 0.5
+# Discovery phase: navigate to site and extract all available channels
 
-  - name: "find_content"
-    kind: Sniff
-    request:
-      url: "tbxapis\\.com.*/items/[^/]+\\.json"
-      method: GET
-    extract:
-      content_id:
-        kind: jsonpath
-        path: "$.result[?(@.content.title == 'Señal Principal')].id"
-      channel_name:
-        kind: jsonpath
-        path: "$.result[?(@.content.title == 'Señal Principal')].content.title"
-      thumbnail_url:
-        kind: jsonpath
-        path: "$.result[?(@.content.title == 'Señal Principal')].content.images[0].url"
+discovery:
+  outputs:
+    id: "${{find_channels.channels.id}}"
+    name: "${{find_channels.channels.name}}"
+    image: "${{find_channels.channels.image}}"
+    expires_in: 86400 # Refresh discovery daily
 
-  - name: "go_to_player"
-    kind: Navigate
-    url: "https://www.canalrcn.com/co/player/${{find_content.content_id}}"
+  steps:
+    - name: "go_home"
+      kind: Navigate
+      url: "https://www.canalrcn.com"
+      wait_for:
+        function: "localStorage.getItem('persist:tbx') && localStorage.getItem('persist:tbx').includes('access_token')"
+        delay: 0.5
 
-  - name: "get_manifest"
-    kind: Sniff
-    request:
-      url: "\\.mpd"
-    extract:
-      mpd_url:
-        kind: url
-      expires_at:
-        kind: urlregex
-        path: "expires=(\\d+)"
+    - name: "find_channels"
+      kind: SniffMany
+      request:
+        url: "tbxapis\\.com.*/items/[^/]+\\.json"
+        method: GET
+        idle_timeout: 3.0
+      extract:
+        channels:
+          kind: jsonpath_array
+          path: "$.result[*]"
+          each:
+            id: "$.id"
+            name: "$.content.title"
+            image: "$.content.images[0].url"
 
-  - name: "get_license_url"
-    kind: Sniff
-    request:
-      url: "license.*widevine"
-      method: POST
-    extract:
-      license_url:
-        kind: url
+# Filter phase: only include channels we care about
 
-outputs:
-  channel_name: "${{find_content.channel_name}}"
-  mpd_url: "${{get_manifest.mpd_url}}"
-  license_url: "${{get_license_url.license_url}}"
-  thumbnail_url: "${{find_content.thumbnail_url}}"
-  expires_at: "${{get_manifest.expires_at}}"
+filter:
+  name:
+    - "RCN Señal en Vivo"
+    - "Señal Principal"
+    - "Multiview"
+
+# Content phase: for each channel, navigate to player and extract stream info
+
+content:
+  outputs:
+    manifest_url: "${{get_manifest.mpd_url}}"
+    license_url: "${{get_license.license_url}}"
+    expires_at: "${{get_manifest.expires_at}}"
+
+  steps:
+    - name: "go_to_player"
+      kind: Navigate
+      url: "https://www.canalrcn.com/co/player/${{channel.id}}"
+
+    - name: "get_manifest"
+      kind: Sniff
+      request:
+        url: "\\.mpd"
+      extract:
+        mpd_url:
+          kind: url
+        expires_at:
+          kind: urlregex
+          path: "expires=(\\d+)"
+
+    - name: "get_license"
+      kind: Sniff
+      request:
+        url: "license.*widevine"
+        method: POST
+      extract:
+        license_url:
+          kind: url

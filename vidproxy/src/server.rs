@@ -1,5 +1,5 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -11,160 +11,372 @@ use axum::{
     routing::get,
 };
 use chrono::{Duration, Utc};
-use tokio::sync::watch;
+use tokio::sync::{RwLock, watch};
 use tokio_util::io::ReaderStream;
 
-use crate::pipeline::PipelineManager;
-use crate::stream_info::StreamInfoReceiver;
+use crate::manifest::Manifest;
+use crate::pipeline::PipelineStore;
+use crate::registry::{ChannelId, ChannelRegistry};
+use crate::source;
+
+/**
+    Store for loaded manifests, keyed by source name
+*/
+pub struct ManifestStore {
+    manifests: RwLock<HashMap<String, Manifest>>,
+    headless: bool,
+}
+
+impl ManifestStore {
+    pub fn new(headless: bool) -> Self {
+        Self {
+            manifests: RwLock::new(HashMap::new()),
+            headless,
+        }
+    }
+
+    pub async fn add(&self, manifest: Manifest) {
+        let mut manifests = self.manifests.write().await;
+        manifests.insert(manifest.source.id.clone(), manifest);
+    }
+
+    pub async fn get(&self, source: &str) -> Option<Manifest> {
+        self.manifests.read().await.get(source).cloned()
+    }
+
+    pub fn headless(&self) -> bool {
+        self.headless
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
-    fallback_channel_name: String,
-    stream_info_rx: StreamInfoReceiver,
-    pipeline_manager: Arc<PipelineManager>,
-    output_dir: PathBuf,
+    registry: Arc<ChannelRegistry>,
+    pipeline_store: Arc<PipelineStore>,
+    manifest_store: Arc<ManifestStore>,
 }
 
+/**
+    Generate M3U playlist with all discovered channels.
+*/
 async fn channels_m3u(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("localhost:8080");
 
-    let stream_info = state.stream_info_rx.borrow();
-    let channel_name = stream_info
-        .as_ref()
-        .map(|info| info.channel_name.as_str())
-        .unwrap_or(&state.fallback_channel_name);
-    let thumbnail_url = stream_info
-        .as_ref()
-        .and_then(|info| info.thumbnail_url.as_deref());
+    let channels = state.registry.list_all();
 
-    let logo_attr = thumbnail_url
-        .map(|url| format!(" tvg-logo=\"{}\"", url))
-        .unwrap_or_default();
+    let mut playlist = format!("#EXTM3U url-tvg=\"http://{}/epg.xml\"\n", host);
 
-    // url-tvg points to EPG data
-    // tvg-id uses channel name as identifier for EPG matching
-    // tvg-type="live" indicates 24/7 live stream (not VOD)
-    // group-title categorizes the channel
-    let playlist = format!(
-        "#EXTM3U url-tvg=\"http://{host}/epg.xml\"\n\
-         #EXTINF:-1 tvg-id=\"{name}\" tvg-name=\"{name}\" tvg-type=\"live\" group-title=\"Live TV\"{logo},{name}\n\
-         http://{host}/playlist.m3u8\n",
-        name = channel_name,
-        logo = logo_attr,
-        host = host,
-    );
+    for (id, entry) in &channels {
+        // Skip channels without stream info
+        if entry.stream_info.is_none() {
+            continue;
+        }
+
+        let channel_name = entry.channel.name.as_deref().unwrap_or(&entry.channel.id);
+
+        let logo_attr = entry
+            .channel
+            .image
+            .as_ref()
+            .map(|url| format!(" tvg-logo=\"{}\"", url))
+            .unwrap_or_default();
+
+        let channel_id = format!("{}:{}", id.source, id.id);
+        let group = &entry.channel.source;
+
+        playlist.push_str(&format!(
+            "#EXTINF:-1 tvg-id=\"{id}\" tvg-name=\"{name}\" tvg-type=\"live\" group-title=\"{group}\"{logo},{name}\n\
+             http://{host}/stream/{source}/{channel}/playlist.m3u8\n",
+            id = escape_xml(&channel_id),
+            name = escape_xml(channel_name),
+            group = escape_xml(group),
+            logo = logo_attr,
+            host = host,
+            source = id.source,
+            channel = id.id,
+        ));
+    }
 
     ([(header::CONTENT_TYPE, "audio/x-mpegurl")], playlist)
 }
 
 /**
-    Generate XMLTV EPG data for 24/7 live channels
+    Generate XMLTV EPG data for all channels.
 */
 async fn epg_xml(State(state): State<AppState>) -> impl IntoResponse {
-    let stream_info = state.stream_info_rx.borrow();
-    let channel_name = stream_info
-        .as_ref()
-        .map(|info| info.channel_name.as_str())
-        .unwrap_or(&state.fallback_channel_name);
-    let thumbnail_url = stream_info
-        .as_ref()
-        .and_then(|info| info.thumbnail_url.as_deref());
-
-    let icon_element = thumbnail_url
-        .map(|url| format!("    <icon src=\"{}\"/>\n", escape_xml(url)))
-        .unwrap_or_default();
-
-    // Generate program entries for the next 7 days (one entry per day)
+    let channels = state.registry.list_all();
     let now = Utc::now();
     let start_of_day = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
     let start = start_of_day.and_utc();
 
+    let mut channel_elements = String::new();
     let mut programmes = String::new();
-    for day in 0..7 {
-        let day_start = start + Duration::days(day);
-        let day_end = day_start + Duration::days(1);
 
-        let start_str = day_start.format("%Y%m%d%H%M%S %z");
-        let end_str = day_end.format("%Y%m%d%H%M%S %z");
+    for (id, entry) in &channels {
+        if entry.stream_info.is_none() {
+            continue;
+        }
 
-        programmes.push_str(&format!(
-            "  <programme start=\"{}\" stop=\"{}\" channel=\"{}\">\n\
-             \x20   <title lang=\"es\">{}</title>\n\
-             \x20   <desc lang=\"es\">Transmisión en vivo 24/7</desc>\n\
-             \x20 </programme>\n",
-            start_str,
-            end_str,
-            escape_xml(channel_name),
-            escape_xml(channel_name),
+        let channel_name = entry.channel.name.as_deref().unwrap_or(&entry.channel.id);
+        let channel_id = format!("{}:{}", id.source, id.id);
+
+        let icon_element = entry
+            .channel
+            .image
+            .as_ref()
+            .map(|url| format!("    <icon src=\"{}\"/>\n", escape_xml(url)))
+            .unwrap_or_default();
+
+        channel_elements.push_str(&format!(
+            "  <channel id=\"{id}\">\n\
+             \x20   <display-name>{name}</display-name>\n\
+             {icon}\
+             \x20 </channel>\n",
+            id = escape_xml(&channel_id),
+            name = escape_xml(channel_name),
+            icon = icon_element,
         ));
+
+        // Generate 7 days of programming
+        for day in 0..7 {
+            let day_start = start + Duration::days(day);
+            let day_end = day_start + Duration::days(1);
+
+            programmes.push_str(&format!(
+                "  <programme start=\"{start}\" stop=\"{stop}\" channel=\"{id}\">\n\
+                 \x20   <title>{name}</title>\n\
+                 \x20   <desc>Live broadcast</desc>\n\
+                 \x20 </programme>\n",
+                start = day_start.format("%Y%m%d%H%M%S %z"),
+                stop = day_end.format("%Y%m%d%H%M%S %z"),
+                id = escape_xml(&channel_id),
+                name = escape_xml(channel_name),
+            ));
+        }
     }
 
     let xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n\
          <tv generator-info-name=\"vidproxy\">\n\
-         \x20 <channel id=\"{id}\">\n\
-         \x20   <display-name lang=\"es\">{name}</display-name>\n\
-         {icon}\
-         \x20 </channel>\n\
+         {channels}\
          {programmes}\
          </tv>\n",
-        id = escape_xml(channel_name),
-        name = escape_xml(channel_name),
-        icon = icon_element,
+        channels = channel_elements,
         programmes = programmes,
     );
 
     ([(header::CONTENT_TYPE, "application/xml")], xml)
 }
 
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
+/**
+    Serve the HLS playlist for a channel, starting the pipeline if needed.
+*/
+async fn stream_playlist(
+    State(state): State<AppState>,
+    Path((source, channel_id)): Path<(String, String)>,
+) -> Result<Response, StatusCode> {
+    let id = ChannelId::new(&source, &channel_id);
 
-/// Serve the HLS playlist, starting the pipeline if needed
-async fn playlist_m3u8(State(state): State<AppState>) -> Result<Response, StatusCode> {
+    // Check if discovery has expired for this source - if so, re-run entire source
+    if state.registry.is_discovery_expired(&source) {
+        println!(
+            "[server] Discovery expired for source '{}', refreshing entire source...",
+            source
+        );
+
+        if let Some(manifest) = state.manifest_store.get(&source).await {
+            match source::run_source(&manifest, state.manifest_store.headless()).await {
+                Ok(result) => {
+                    state.registry.register_source(
+                        &result.source_id,
+                        result.channels,
+                        result.discovery_expires_at,
+                    );
+                    println!("[server] Refreshed source '{}'", source);
+                }
+                Err(e) => {
+                    eprintln!("[server] Failed to refresh source '{}': {}", source, e);
+                    // Continue with existing data
+                }
+            }
+        }
+    }
+
+    // Check if channel exists
+    let entry = state.registry.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+
+    // Check if pipeline exists and needs refresh due to auth error
+    let pipeline_needs_refresh = if let Some(pipeline) = state.pipeline_store.get(&id).await {
+        pipeline.needs_refresh()
+    } else {
+        false
+    };
+
+    // Check if stream info is expired and needs refresh
+    let stream_info = if state.registry.is_stream_expired(&id) || pipeline_needs_refresh {
+        if pipeline_needs_refresh {
+            println!(
+                "[server] Pipeline auth error for {}, refreshing...",
+                id.to_string()
+            );
+        } else {
+            println!(
+                "[server] Stream info expired for {}, refreshing...",
+                id.to_string()
+            );
+        }
+
+        // Get manifest for this source
+        let manifest = state.manifest_store.get(&source).await.ok_or_else(|| {
+            eprintln!("[server] No manifest found for source '{}'", source);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        // Refresh the channel
+        match source::refresh_channel(&manifest, &channel_id, state.manifest_store.headless()).await
+        {
+            Ok(new_stream_info) => {
+                println!("[server] Refreshed stream info for {}", id.to_string());
+
+                // Update registry
+                state
+                    .registry
+                    .update_stream_info(&id, new_stream_info.clone());
+
+                // Update pipeline if it exists
+                if let Some(pipeline) = state.pipeline_store.get(&id).await {
+                    pipeline.update_stream_info(new_stream_info.clone()).await;
+                    // Stop the pipeline so it restarts with new stream info
+                    pipeline.stop().await;
+                }
+
+                new_stream_info
+            }
+            Err(e) => {
+                eprintln!(
+                    "[server] Failed to refresh channel {}: {}",
+                    id.to_string(),
+                    e
+                );
+                state.registry.set_error(&id, e.to_string());
+
+                // Try to use existing stream info if available
+                entry.stream_info.clone().ok_or_else(|| {
+                    eprintln!("[server] No existing stream info available");
+                    StatusCode::SERVICE_UNAVAILABLE
+                })?
+            }
+        }
+    } else {
+        // Use existing stream info
+        entry.stream_info.clone().ok_or_else(|| {
+            if let Some(ref err) = entry.last_error {
+                eprintln!("[server] Channel {} has error: {}", id.to_string(), err);
+            }
+            StatusCode::SERVICE_UNAVAILABLE
+        })?
+    };
+
+    // Get or create pipeline for this channel
+    let pipeline = state
+        .pipeline_store
+        .get_or_create(&id, &stream_info)
+        .await
+        .map_err(|e| {
+            eprintln!(
+                "[server] Failed to create pipeline for {}: {}",
+                id.to_string(),
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
     // Ensure pipeline is running
-    state.pipeline_manager.ensure_running().await.map_err(|e| {
-        eprintln!("[server] Failed to start pipeline: {}", e);
+    pipeline.ensure_running().await.map_err(|e| {
+        eprintln!(
+            "[server] Failed to start pipeline for {}: {}",
+            id.to_string(),
+            e
+        );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
 
-    // Wait for first segment to be ready
-    state.pipeline_manager.wait_for_ready().await.map_err(|e| {
-        eprintln!("[server] Timeout waiting for pipeline: {}", e);
+    // Wait for first segment
+    pipeline.wait_for_ready().await.map_err(|e| {
+        eprintln!(
+            "[server] Timeout waiting for pipeline {}: {}",
+            id.to_string(),
+            e
+        );
         StatusCode::GATEWAY_TIMEOUT
     })?;
 
-    // Record activity
-    state.pipeline_manager.record_activity();
+    pipeline.record_activity();
 
     // Serve the playlist file
-    let playlist_path = state.output_dir.join("playlist.m3u8");
+    let playlist_path = pipeline.output_dir().join("playlist.m3u8");
     serve_file(&playlist_path, "application/vnd.apple.mpegurl").await
 }
 
-/// Serve a segment file and track activity
-async fn serve_segment(
+/**
+    Serve a segment file for a channel.
+*/
+async fn stream_segment(
     State(state): State<AppState>,
-    Path(filename): Path<String>,
+    Path((source, channel_id, filename)): Path<(String, String, String)>,
 ) -> Result<Response, StatusCode> {
-    // Record activity for idle tracking
-    state.pipeline_manager.record_activity();
+    let id = ChannelId::new(&source, &channel_id);
 
-    // Serve the segment file
-    let segment_path = state.output_dir.join(&filename);
+    let pipeline = state
+        .pipeline_store
+        .get(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    pipeline.record_activity();
+
+    let segment_path = pipeline.output_dir().join(&filename);
     serve_file(&segment_path, "video/mp2t").await
 }
 
-/// Helper to serve a file with given content type
+/**
+    Get channel info (JSON).
+*/
+async fn channel_info(
+    State(state): State<AppState>,
+    Path((source, channel_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let id = ChannelId::new(&source, &channel_id);
+
+    let entry = state.registry.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let stream_info = entry.stream_info.as_ref();
+
+    let json = serde_json::json!({
+        "id": id.to_string(),
+        "source": source,
+        "channel_id": channel_id,
+        "name": entry.channel.name,
+        "image": entry.channel.image,
+        "manifest_url": stream_info.map(|s| &s.manifest_url),
+        "license_url": stream_info.and_then(|s| s.license_url.as_ref()),
+        "expires_at": stream_info.and_then(|s| s.expires_at),
+        "error": entry.last_error,
+    });
+
+    Ok((
+        [(header::CONTENT_TYPE, "application/json")],
+        json.to_string(),
+    ))
+}
+
+/**
+    Helper to serve a file
+*/
 async fn serve_file(path: &std::path::Path, content_type: &str) -> Result<Response, StatusCode> {
     let file = tokio::fs::File::open(path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -185,38 +397,48 @@ async fn serve_file(path: &std::path::Path, content_type: &str) -> Result<Respon
         .unwrap())
 }
 
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 /**
-    Run the HTTP server that serves HLS content.
+    Run the HTTP server.
 */
 pub async fn run_server(
     addr: SocketAddr,
-    pipeline_manager: Arc<PipelineManager>,
+    registry: Arc<ChannelRegistry>,
+    pipeline_store: Arc<PipelineStore>,
+    manifest_store: Arc<ManifestStore>,
     mut shutdown_rx: watch::Receiver<bool>,
-    channel_name: &str,
-    stream_info_rx: StreamInfoReceiver,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let output_dir = pipeline_manager.output_dir().to_path_buf();
-
     let state = AppState {
-        fallback_channel_name: channel_name.to_string(),
-        stream_info_rx,
-        pipeline_manager,
-        output_dir,
+        registry,
+        pipeline_store,
+        manifest_store,
     };
 
     let app = Router::new()
         .route("/channels.m3u", get(channels_m3u))
         .route("/epg.xml", get(epg_xml))
-        .route("/playlist.m3u8", get(playlist_m3u8))
-        .route("/{filename}", get(serve_segment))
+        .route("/stream/{source}/{channel_id}/info", get(channel_info))
+        .route(
+            "/stream/{source}/{channel_id}/playlist.m3u8",
+            get(stream_playlist),
+        )
+        .route(
+            "/stream/{source}/{channel_id}/{filename}",
+            get(stream_segment),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("HTTP server listening on http://{}", addr);
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            // Wait for shutdown signal
             while !*shutdown_rx.borrow_and_update() {
                 if shutdown_rx.changed().await.is_err() {
                     break;

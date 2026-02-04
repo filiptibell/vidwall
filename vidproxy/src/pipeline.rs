@@ -1,83 +1,92 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
-use tokio::sync::{Mutex, oneshot, watch};
+use tokio::sync::{Mutex, RwLock, oneshot, watch};
 
 use crate::cdrm;
-use crate::coordinator::RefreshSender;
+use crate::manifest::StreamInfo;
 use crate::proxy;
+use crate::registry::ChannelId;
 use crate::segments::SegmentManager;
-use crate::stream_info::StreamInfo;
 
-/// State of the pipeline
+/**
+    State of a pipeline
+*/
 #[derive(Debug)]
 enum PipelineState {
-    /// Pipeline is not running
     Idle,
-    /// Pipeline is starting up
     Starting,
-    /// Pipeline is running
-    Running {
-        /// Send to stop the pipeline
-        stop_tx: oneshot::Sender<()>,
-    },
-    /// Pipeline is stopping
+    Running { stop_tx: oneshot::Sender<()> },
     Stopping,
 }
 
-/// Manages the lifecycle of a remux pipeline.
-///
-/// The pipeline is started on-demand when a client requests the playlist,
-/// and stopped after a period of inactivity.
-pub struct PipelineManager {
+/**
+    Check if an error message indicates an auth/credential issue
+*/
+fn is_auth_error(error_msg: &str) -> bool {
+    let error_lower = error_msg.to_lowercase();
+    error_lower.contains("401")
+        || error_lower.contains("403")
+        || error_lower.contains("410")
+        || error_lower.contains("unauthorized")
+        || error_lower.contains("forbidden")
+        || error_lower.contains("expired")
+        || error_lower.contains("invalid token")
+        || error_lower.contains("access denied")
+}
+
+/**
+    Manages the lifecycle of a single channel's remux pipeline.
+*/
+pub struct ChannelPipeline {
+    channel_id: ChannelId,
     state: Arc<Mutex<PipelineState>>,
-    stream_info_rx: watch::Receiver<Option<StreamInfo>>,
-    refresh_tx: RefreshSender,
+    stream_info: Arc<RwLock<StreamInfo>>,
     segment_manager: Arc<SegmentManager>,
     segment_duration: Duration,
     output_dir: PathBuf,
-    idle_timeout: Duration,
     startup_timeout: Duration,
     last_activity: AtomicU64,
+    /// Set to true if pipeline failed due to auth error (needs refresh)
+    needs_refresh: Arc<AtomicBool>,
 }
 
-impl PipelineManager {
+impl ChannelPipeline {
     pub fn new(
-        stream_info_rx: watch::Receiver<Option<StreamInfo>>,
-        refresh_tx: RefreshSender,
+        channel_id: ChannelId,
+        stream_info: StreamInfo,
         segment_manager: Arc<SegmentManager>,
         segment_duration: Duration,
         output_dir: PathBuf,
-        idle_timeout: Duration,
         startup_timeout: Duration,
     ) -> Self {
         Self {
+            channel_id,
             state: Arc::new(Mutex::new(PipelineState::Idle)),
-            stream_info_rx,
-            refresh_tx,
+            stream_info: Arc::new(RwLock::new(stream_info)),
             segment_manager,
+            needs_refresh: Arc::new(AtomicBool::new(false)),
             segment_duration,
             output_dir,
-            idle_timeout,
             startup_timeout,
             last_activity: AtomicU64::new(0),
         }
     }
 
-    /// Get the output directory
     pub fn output_dir(&self) -> &std::path::Path {
         &self.output_dir
     }
 
-    /// Check if the pipeline is currently running
     pub async fn is_running(&self) -> bool {
         matches!(*self.state.lock().await, PipelineState::Running { .. })
     }
 
-    /// Record activity (called on segment requests)
     pub fn record_activity(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -86,8 +95,7 @@ impl PipelineManager {
         self.last_activity.store(now, Ordering::Relaxed);
     }
 
-    /// Get seconds since last activity
-    fn seconds_since_activity(&self) -> u64 {
+    pub fn seconds_since_activity(&self) -> u64 {
         let last = self.last_activity.load(Ordering::Relaxed);
         if last == 0 {
             return 0;
@@ -99,10 +107,34 @@ impl PipelineManager {
         now.saturating_sub(last)
     }
 
-    /// Ensure the pipeline is running. If not running, start it.
-    /// Returns immediately if already running.
+    /**
+        Update the stream info (e.g., after refresh)
+    */
+    pub async fn update_stream_info(&self, info: StreamInfo) {
+        *self.stream_info.write().await = info;
+        // Clear refresh flag since we have new credentials
+        self.needs_refresh.store(false, Ordering::Relaxed);
+    }
+
+    /**
+        Check if pipeline needs a credential refresh (failed due to auth error)
+    */
+    pub fn needs_refresh(&self) -> bool {
+        self.needs_refresh.load(Ordering::Relaxed)
+    }
+
+    /**
+        Clear the refresh flag
+    */
+    #[allow(dead_code)]
+    pub fn clear_refresh_flag(&self) {
+        self.needs_refresh.store(false, Ordering::Relaxed);
+    }
+
+    /**
+        Ensure the pipeline is running
+    */
     pub async fn ensure_running(&self) -> Result<()> {
-        // Check current state
         {
             let state = self.state.lock().await;
             match *state {
@@ -111,77 +143,54 @@ impl PipelineManager {
                     return Ok(());
                 }
                 PipelineState::Starting => {
-                    // Already starting, caller should wait_for_ready
                     return Ok(());
                 }
                 PipelineState::Stopping => {
                     return Err(anyhow!("Pipeline is stopping, try again later"));
                 }
-                PipelineState::Idle => {
-                    // Need to start
-                }
+                PipelineState::Idle => {}
             }
         }
-
-        // Start the pipeline
         self.start().await
     }
 
-    /// Start the pipeline
     async fn start(&self) -> Result<()> {
-        // Transition to Starting
         {
             let mut state = self.state.lock().await;
             if !matches!(*state, PipelineState::Idle) {
-                return Ok(()); // Already starting or running
+                return Ok(());
             }
             *state = PipelineState::Starting;
         }
 
-        // Get stream info
-        let stream_info = self
-            .stream_info_rx
-            .borrow()
-            .clone()
-            .ok_or_else(|| anyhow!("No stream info available"))?;
-
-        // Clear old segments
+        let stream_info = self.stream_info.read().await.clone();
         self.segment_manager.clear();
-
-        // Record initial activity
         self.record_activity();
 
-        // Create stop channel
         let (stop_tx, stop_rx) = oneshot::channel();
 
-        // Clone what we need for the spawned task
-        let mpd_url = stream_info.mpd_url.clone();
+        let mpd_url = stream_info.manifest_url.clone();
         let license_url = stream_info.license_url.clone();
         let output_dir = self.output_dir.clone();
         let segment_duration = self.segment_duration;
         let segment_manager = Arc::clone(&self.segment_manager);
         let state = Arc::clone(&self.state);
-        let refresh_tx = self.refresh_tx.clone();
+        let channel_id = self.channel_id.to_string();
 
-        // Spawn the pipeline task
+        // Clone the Arc to needs_refresh so we can set it from the spawned task
+        let needs_refresh = Arc::clone(&self.needs_refresh);
+
         tokio::spawn(async move {
-            // Helper to reset state to Idle on exit
-            let reset_state = |auth_error: bool| {
+            let reset_state = |set_needs_refresh: bool| {
                 let state = Arc::clone(&state);
-                let refresh_tx = refresh_tx.clone();
+                let needs_refresh = Arc::clone(&needs_refresh);
                 async move {
                     let mut state_guard = state.lock().await;
-                    // Only reset if we're still in Running state (not being stopped externally)
                     if matches!(*state_guard, PipelineState::Running { .. }) {
                         *state_guard = PipelineState::Idle;
-
-                        // If this looks like an auth error, request credential refresh
-                        if auth_error {
-                            println!(
-                                "[pipeline] Auth error detected, requesting credential refresh"
-                            );
-                            let _ = refresh_tx.send(true);
-                        }
+                    }
+                    if set_needs_refresh {
+                        needs_refresh.store(true, Ordering::Relaxed);
                     }
                 }
             };
@@ -189,12 +198,18 @@ impl PipelineManager {
             // Fetch decryption key if needed
             let decryption_key = if let Some(ref lic_url) = license_url {
                 match cdrm::get_decryption_key(&mpd_url, lic_url).await {
-                    Ok(key) => Some(key),
+                    Ok(key) => {
+                        println!("[pipeline:{}] Got decryption key", channel_id);
+                        Some(key)
+                    }
                     Err(e) => {
-                        let err_str = e.to_string();
-                        eprintln!("[pipeline] Failed to get decryption key: {}", err_str);
-                        let is_auth_error = is_auth_error(&err_str);
-                        reset_state(is_auth_error).await;
+                        let error_str = e.to_string();
+                        eprintln!(
+                            "[pipeline:{}] Failed to get decryption key: {}",
+                            channel_id, error_str
+                        );
+                        let is_auth = is_auth_error(&error_str);
+                        reset_state(is_auth).await;
                         return;
                     }
                 }
@@ -202,18 +217,16 @@ impl PipelineManager {
                 None
             };
 
-            // Create a watch channel for shutdown signaling within the pipeline
             let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-            // Spawn the stop listener
             let shutdown_tx_clone = shutdown_tx.clone();
             tokio::spawn(async move {
                 let _ = stop_rx.await;
                 let _ = shutdown_tx_clone.send(true);
             });
 
-            // Run the pipeline
-            println!("[pipeline] Starting remux pipeline");
+            println!("[pipeline:{}] Starting remux pipeline", channel_id);
+            let channel_id_clone = channel_id.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let rt = tokio::runtime::Handle::current();
                 rt.block_on(proxy::run_remux_pipeline(
@@ -228,37 +241,54 @@ impl PipelineManager {
             })
             .await;
 
-            let auth_error = match &result {
+            let is_auth = match &result {
                 Ok(Ok(())) => {
-                    println!("[pipeline] Pipeline completed normally");
+                    println!(
+                        "[pipeline:{}] Pipeline completed normally",
+                        channel_id_clone
+                    );
                     false
                 }
                 Ok(Err(e)) => {
-                    let err_str = e.to_string();
-                    eprintln!("[pipeline] Pipeline error: {}", err_str);
-                    is_auth_error(&err_str)
+                    let error_str = e.to_string();
+                    let is_auth = is_auth_error(&error_str);
+                    if is_auth {
+                        eprintln!(
+                            "[pipeline:{}] Pipeline auth error (needs refresh): {}",
+                            channel_id_clone, error_str
+                        );
+                    } else {
+                        eprintln!(
+                            "[pipeline:{}] Pipeline error: {}",
+                            channel_id_clone, error_str
+                        );
+                    }
+                    is_auth
                 }
                 Err(e) => {
-                    eprintln!("[pipeline] Pipeline task panicked: {}", e);
+                    eprintln!(
+                        "[pipeline:{}] Pipeline task panicked: {}",
+                        channel_id_clone, e
+                    );
                     false
                 }
             };
 
-            // Pipeline ended (either normally or with error), reset state
-            reset_state(auth_error).await;
+            reset_state(is_auth).await;
         });
 
-        // Transition to Running
         {
             let mut state = self.state.lock().await;
             *state = PipelineState::Running { stop_tx };
         }
 
-        println!("[pipeline] Pipeline started");
+        println!(
+            "[pipeline:{}] Pipeline started",
+            self.channel_id.to_string()
+        );
         Ok(())
     }
 
-    /// Stop the pipeline if running
     pub async fn stop(&self) {
         let stop_tx = {
             let mut state = self.state.lock().await;
@@ -272,23 +302,20 @@ impl PipelineManager {
         };
 
         if let Some(tx) = stop_tx {
-            println!("[pipeline] Stopping pipeline");
+            println!(
+                "[pipeline:{}] Stopping pipeline",
+                self.channel_id.to_string()
+            );
             let _ = tx.send(());
-
-            // Give it a moment to clean up
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
-        // Transition to Idle
         {
             let mut state = self.state.lock().await;
             *state = PipelineState::Idle;
         }
-
-        println!("[pipeline] Pipeline stopped");
     }
 
-    /// Wait for the pipeline to be ready (has at least one segment)
     pub async fn wait_for_ready(&self) -> Result<()> {
         let deadline = Instant::now() + self.startup_timeout;
 
@@ -301,7 +328,6 @@ impl PipelineManager {
                 return Err(anyhow!("Timeout waiting for first segment"));
             }
 
-            // Check if pipeline failed to start
             {
                 let state = self.state.lock().await;
                 if matches!(*state, PipelineState::Idle) {
@@ -312,58 +338,132 @@ impl PipelineManager {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
+}
 
-    /// Run background management tasks for this pipeline.
-    ///
-    /// This handles:
-    /// - Stopping the pipeline after idle timeout
-    /// - Restarting the pipeline when stream info changes (credential refresh)
-    /// - Graceful shutdown
-    pub async fn run_background_tasks(self: Arc<Self>, mut shutdown_rx: watch::Receiver<bool>) {
-        let mut stream_info_rx = self.stream_info_rx.clone();
+/**
+    Configuration for pipeline creation
+*/
+#[derive(Clone)]
+pub struct PipelineConfig {
+    pub segment_count: usize,
+    pub segment_duration: Duration,
+    pub idle_timeout: Duration,
+    pub startup_timeout: Duration,
+    pub base_output_dir: PathBuf,
+}
 
-        loop {
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                    // Check if we should stop due to inactivity
-                    if self.is_running().await {
-                        let idle_secs = self.seconds_since_activity();
-                        if idle_secs > self.idle_timeout.as_secs() {
-                            println!("[pipeline] Idle for {}s, stopping pipeline", idle_secs);
-                            self.stop().await;
+/**
+    Manages multiple channel pipelines
+*/
+pub struct PipelineStore {
+    pipelines: RwLock<HashMap<ChannelId, Arc<ChannelPipeline>>>,
+    config: PipelineConfig,
+    shutdown_rx: watch::Receiver<bool>,
+}
+
+impl PipelineStore {
+    pub fn new(config: PipelineConfig, shutdown_rx: watch::Receiver<bool>) -> Self {
+        Self {
+            pipelines: RwLock::new(HashMap::new()),
+            config,
+            shutdown_rx,
+        }
+    }
+
+    /**
+        Get or create a pipeline for a channel
+    */
+    pub async fn get_or_create(
+        &self,
+        channel_id: &ChannelId,
+        stream_info: &StreamInfo,
+    ) -> Result<Arc<ChannelPipeline>> {
+        // Check if pipeline exists
+        {
+            let pipelines = self.pipelines.read().await;
+            if let Some(pipeline) = pipelines.get(channel_id) {
+                return Ok(Arc::clone(pipeline));
+            }
+        }
+
+        // Create new pipeline
+        let mut pipelines = self.pipelines.write().await;
+
+        // Double-check after acquiring write lock
+        if let Some(pipeline) = pipelines.get(channel_id) {
+            return Ok(Arc::clone(pipeline));
+        }
+
+        // Create channel-specific output directory
+        let channel_dir = self
+            .config
+            .base_output_dir
+            .join(format!("{}__{}", channel_id.source, channel_id.id));
+        std::fs::create_dir_all(&channel_dir)?;
+
+        let segment_manager = Arc::new(SegmentManager::new(
+            channel_dir.clone(),
+            self.config.segment_count,
+        ));
+
+        let pipeline = Arc::new(ChannelPipeline::new(
+            channel_id.clone(),
+            stream_info.clone(),
+            segment_manager,
+            self.config.segment_duration,
+            channel_dir,
+            self.config.startup_timeout,
+        ));
+
+        // Start idle check task for this pipeline
+        let pipeline_clone = Arc::clone(&pipeline);
+        let idle_timeout = self.config.idle_timeout;
+        let mut shutdown_rx = self.shutdown_rx.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                        if pipeline_clone.is_running().await {
+                            let idle_secs = pipeline_clone.seconds_since_activity();
+                            if idle_secs > idle_timeout.as_secs() {
+                                println!(
+                                    "[pipeline:{}] Idle for {}s, stopping",
+                                    pipeline_clone.channel_id.to_string(),
+                                    idle_secs
+                                );
+                                pipeline_clone.stop().await;
+                            }
                         }
                     }
-                }
-                _ = stream_info_rx.changed() => {
-                    // Stream info changed - if pipeline is running, restart it
-                    if self.is_running().await {
-                        println!("[pipeline] Stream info changed, restarting pipeline");
-                        self.stop().await;
-                        // Small delay before restart
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        if let Err(e) = self.ensure_running().await {
-                            eprintln!("[pipeline] Failed to restart after stream info change: {}", e);
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            pipeline_clone.stop().await;
+                            return;
                         }
-                    }
-                }
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        // Shutdown requested, stop pipeline if running
-                        self.stop().await;
-                        return;
                     }
                 }
             }
+        });
+
+        pipelines.insert(channel_id.clone(), Arc::clone(&pipeline));
+        Ok(pipeline)
+    }
+
+    /**
+        Get an existing pipeline (without creating)
+    */
+    pub async fn get(&self, channel_id: &ChannelId) -> Option<Arc<ChannelPipeline>> {
+        self.pipelines.read().await.get(channel_id).cloned()
+    }
+
+    /**
+        Stop all pipelines
+    */
+    pub async fn stop_all(&self) {
+        let pipelines = self.pipelines.read().await;
+        for pipeline in pipelines.values() {
+            pipeline.stop().await;
         }
     }
-}
-
-/// Check if an error message indicates an authentication/authorization failure
-fn is_auth_error(err: &str) -> bool {
-    err.contains("401")
-        || err.contains("403")
-        || err.contains("410")
-        || err.contains("Unauthorized")
-        || err.contains("Forbidden")
-        || err.contains("expired")
 }
