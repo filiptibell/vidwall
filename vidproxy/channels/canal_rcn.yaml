@@ -37,8 +37,6 @@ steps:
     extract:
       mpd_url:
         kind: url
-      pssh:
-        kind: pssh
       expires_at:
         kind: urlregex
         path: "expires=(\\d+)"
@@ -52,17 +50,9 @@ steps:
       license_url:
         kind: url
 
-  - name: "fetch_keys"
-    kind: CdrmRequest
-    pssh: "${{get_manifest.pssh}}"
-    license_url: "${{get_license_url.license_url}}"
-    extract:
-      decryption_key:
-        kind: line
-
 outputs:
   channel_name: "${{find_content.channel_name}}"
   mpd_url: "${{get_manifest.mpd_url}}"
-  decryption_key: "${{fetch_keys.decryption_key}}"
+  license_url: "${{get_license_url.license_url}}"
   thumbnail_url: "${{find_content.thumbnail_url}}"
   expires_at: "${{get_manifest.expires_at}}"

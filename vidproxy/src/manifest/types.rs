@@ -42,12 +42,6 @@ pub struct Step {
     /// Request matching for Sniff steps
     #[serde(default)]
     pub request: Option<RequestMatch>,
-    /// PSSH for CdrmRequest steps (supports interpolation)
-    #[serde(default)]
-    pub pssh: Option<String>,
-    /// License URL for CdrmRequest steps (supports interpolation)
-    #[serde(default)]
-    pub license_url: Option<String>,
     /// Extractors to run on the response
     #[serde(default)]
     pub extract: HashMap<String, Extractor>,
@@ -78,8 +72,6 @@ pub enum StepKind {
     Navigate,
     /// Wait for a matching network request and extract data
     Sniff,
-    /// Call CDRM API to get decryption keys
-    CdrmRequest,
 }
 
 /**
@@ -141,8 +133,10 @@ pub struct Outputs {
     pub channel_name: Option<String>,
     /// The manifest/stream URL (supports interpolation)
     pub mpd_url: String,
-    /// The decryption key in "kid:key" format (supports interpolation)
-    pub decryption_key: String,
+    /// Optional license URL for DRM content (supports interpolation)
+    /// If present, PSSH will be extracted from MPD and CDRM will be called automatically
+    #[serde(default)]
+    pub license_url: Option<String>,
     /// Optional thumbnail URL for channel logo (supports interpolation)
     #[serde(default)]
     pub thumbnail_url: Option<String>,
@@ -158,7 +152,7 @@ pub struct Outputs {
 pub struct ManifestOutputs {
     pub channel_name: String,
     pub mpd_url: String,
-    pub decryption_key: String,
+    pub license_url: Option<String>,
     pub thumbnail_url: Option<String>,
     pub expires_at: Option<u64>,
 }

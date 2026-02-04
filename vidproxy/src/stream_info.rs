@@ -11,12 +11,9 @@ pub struct StreamInfo {
     pub channel_name: String,
     /// The DASH/HLS manifest URL
     pub mpd_url: String,
-    /// Decryption key in "key_id:key" format
-    pub decryption_key: String,
-    /// License server URL (for potential refresh)
-    pub license_url: String,
-    /// PSSH box in base64 (for potential refresh)
-    pub pssh: String,
+    /// Optional license server URL for DRM content
+    /// If present, PSSH will be extracted from MPD and decryption key fetched automatically
+    pub license_url: Option<String>,
     /// Optional thumbnail URL for channel logo
     pub thumbnail_url: Option<String>,
     /// Optional expiration timestamp (Unix seconds)

@@ -5,6 +5,7 @@ use std::time::Duration;
 use clap::Parser;
 use tokio::{signal, sync::watch};
 
+mod cdrm;
 mod coordinator;
 mod manifest;
 mod proxy;

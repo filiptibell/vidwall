@@ -1,25 +1,10 @@
 use anyhow::{Result, anyhow};
 use chrome_browser::{ChromeBrowser, ChromeBrowserTab, NetworkRequestStream};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 
 use super::extractors::extract;
 use super::interpolate::InterpolationContext;
 use super::types::{Manifest, ManifestOutputs, Step, StepKind};
-
-const CDRM_API_URL: &str = "https://cdrm-project.com/api/decrypt";
-
-#[derive(Debug, Serialize)]
-struct CdrmRequest {
-    pssh: String,
-    licurl: String,
-    headers: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CdrmResponse {
-    message: String,
-}
 
 /**
     Execute a manifest using the given browser.
@@ -45,9 +30,6 @@ pub async fn execute(manifest: &Manifest, browser: &ChromeBrowser) -> Result<Man
             StepKind::Sniff => {
                 execute_sniff(step, &mut requests, &mut context).await?;
             }
-            StepKind::CdrmRequest => {
-                execute_cdrm_request(step, &manifest.channel.name, &mut context).await?;
-            }
         }
     }
 
@@ -57,7 +39,12 @@ pub async fn execute(manifest: &Manifest, browser: &ChromeBrowser) -> Result<Man
         None => manifest.channel.name.clone(),
     };
     let mpd_url = context.interpolate(&manifest.outputs.mpd_url)?;
-    let decryption_key = context.interpolate(&manifest.outputs.decryption_key)?;
+    let license_url = manifest
+        .outputs
+        .license_url
+        .as_ref()
+        .map(|l| context.interpolate(l))
+        .transpose()?;
     let thumbnail_url = manifest
         .outputs
         .thumbnail_url
@@ -75,7 +62,7 @@ pub async fn execute(manifest: &Manifest, browser: &ChromeBrowser) -> Result<Man
     Ok(ManifestOutputs {
         channel_name,
         mpd_url,
-        decryption_key,
+        license_url,
         thumbnail_url,
         expires_at,
     })
@@ -219,72 +206,4 @@ async fn execute_sniff(
         // Extraction failed, try next matching request
         println!("[executor] Extraction failed, trying next request...");
     }
-}
-
-/**
-    Execute a CdrmRequest step.
-*/
-async fn execute_cdrm_request(
-    step: &Step,
-    _channel_name: &str,
-    context: &mut InterpolationContext,
-) -> Result<()> {
-    let pssh_template = step
-        .pssh
-        .as_ref()
-        .ok_or_else(|| anyhow!("CdrmRequest step '{}' requires 'pssh'", step.name))?;
-
-    let license_url_template = step
-        .license_url
-        .as_ref()
-        .ok_or_else(|| anyhow!("CdrmRequest step '{}' requires 'license_url'", step.name))?;
-
-    let pssh = context.interpolate(pssh_template)?;
-    let license_url = context.interpolate(license_url_template)?;
-
-    println!("[executor] Requesting decryption keys from CDRM API...");
-
-    let client = reqwest::Client::new();
-    let cdrm_req = CdrmRequest {
-        pssh,
-        licurl: license_url,
-        headers: format!(
-            "{:?}",
-            std::collections::HashMap::from([
-                (
-                    "User-Agent",
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-                ),
-                ("Accept", "*/*"),
-            ])
-        ),
-    };
-
-    let resp = client.post(CDRM_API_URL).json(&cdrm_req).send().await?;
-
-    if !resp.status().is_success() {
-        return Err(anyhow!("CDRM API error: {}", resp.status()));
-    }
-
-    let cdrm_resp: CdrmResponse = resp.json().await?;
-
-    // Run extractors on the response
-    for (output_name, extractor) in &step.extract {
-        match extract(extractor, &cdrm_resp.message, "") {
-            Ok(value) => {
-                println!("[executor] Extracted {}.{}", step.name, output_name);
-                context.set(&step.name, output_name, value);
-            }
-            Err(e) => {
-                return Err(anyhow!(
-                    "Failed to extract {}.{}: {}",
-                    step.name,
-                    output_name,
-                    e
-                ));
-            }
-        }
-    }
-
-    Ok(())
 }

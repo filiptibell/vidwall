@@ -4,6 +4,7 @@ use std::time::Duration;
 use chrono::Utc;
 use tokio::sync::watch;
 
+use crate::cdrm;
 use crate::proxy;
 use crate::segments::SegmentManager;
 use crate::stream_info::{StreamInfo, StreamInfoReceiver};
@@ -191,7 +192,22 @@ impl Coordinator {
         refresh_after: Option<Duration>,
     ) -> PipelineResult {
         let input_url = stream_info.mpd_url.clone();
-        let decryption_key = Some(stream_info.decryption_key.clone());
+
+        // If license_url is present, fetch decryption key via CDRM
+        let decryption_key = if let Some(ref license_url) = stream_info.license_url {
+            match cdrm::get_decryption_key(&stream_info.mpd_url, license_url).await {
+                Ok(key) => Some(key),
+                Err(e) => {
+                    return PipelineResult::SourceError(format!(
+                        "Failed to get decryption key: {}",
+                        e
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         let output_dir = self.output_dir.clone();
         let segment_duration = self.segment_duration;
         let segment_manager = Arc::clone(&self.segment_manager);
