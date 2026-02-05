@@ -237,6 +237,8 @@ pub enum StepKind {
     Sniff,
     /// Collect multiple matching network requests and aggregate extracted data
     SniffMany,
+    /// Fetch a URL via HTTP (no browser needed)
+    Fetch,
 }
 
 /**
@@ -274,6 +276,9 @@ pub struct Extractor {
     /// Supports $parent.field syntax to reference parent objects in nested paths
     #[serde(default)]
     pub each: Option<HashMap<String, String>>,
+    /// Unescape JSON unicode sequences (e.g., \\u0026 -> &) in the extracted value
+    #[serde(default)]
+    pub unescape: bool,
 }
 
 /**

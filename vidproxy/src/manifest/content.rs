@@ -12,6 +12,7 @@ pub async fn execute_content(
     phase: &ContentPhase,
     tab: &ChromeBrowserTab,
     channel: &DiscoveredChannel,
+    proxy: Option<&str>,
 ) -> Result<StreamInfo> {
     // Build initial context with channel fields
     let mut context = InterpolationContext::new();
@@ -23,7 +24,7 @@ pub async fn execute_content(
         context.set("channel", "image", image.clone());
     }
 
-    let (context, _) = execute_steps(&phase.steps, tab, context).await?;
+    let (context, _) = execute_steps(&phase.steps, tab, context, proxy).await?;
 
     // Resolve outputs
     let manifest_url = context.interpolate(&phase.outputs.manifest_url)?;

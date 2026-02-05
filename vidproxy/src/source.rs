@@ -69,8 +69,9 @@ pub async fn run_source(manifest: &Manifest, headless: bool) -> Result<SourceRes
 
     // Run discovery phase
     println!("[source] Running discovery phase...");
+    let proxy = manifest.source.proxy.as_deref();
     let discovery_result =
-        manifest::execute_discovery(&manifest.discovery, &tab, source_id).await?;
+        manifest::execute_discovery(&manifest.discovery, &tab, source_id, proxy).await?;
 
     let channels = discovery_result.channels;
     println!("[source] Discovery found {} channels", channels.len());
@@ -123,7 +124,7 @@ pub async fn run_source(manifest: &Manifest, headless: bool) -> Result<SourceRes
     if let Some(ref metadata_phase) = manifest.metadata {
         println!("[source] Running metadata phase...");
 
-        match manifest::execute_metadata(metadata_phase, &tab).await {
+        match manifest::execute_metadata(metadata_phase, &tab, proxy).await {
             Ok(result) => {
                 channel_programmes = result.programmes_by_channel;
             }
@@ -145,7 +146,7 @@ pub async fn run_source(manifest: &Manifest, headless: bool) -> Result<SourceRes
         let mut stream_info = None;
 
         for attempt in 1..=MAX_RETRIES {
-            match manifest::execute_content(&manifest.content, &tab, channel).await {
+            match manifest::execute_content(&manifest.content, &tab, channel, proxy).await {
                 Ok(info) => {
                     println!("[source] Content phase completed for: {}", channel_name);
                     stream_info = Some(info);
@@ -228,8 +229,9 @@ pub async fn run_source_discovery_only(
 
     // Run discovery phase
     println!("[source] Running discovery phase...");
+    let proxy = manifest.source.proxy.as_deref();
     let discovery_result =
-        manifest::execute_discovery(&manifest.discovery, &tab, source_id).await?;
+        manifest::execute_discovery(&manifest.discovery, &tab, source_id, proxy).await?;
 
     let channels = discovery_result.channels;
     println!("[source] Discovery found {} channels", channels.len());
@@ -277,7 +279,7 @@ pub async fn run_source_discovery_only(
     if let Some(ref metadata_phase) = manifest.metadata {
         println!("[source] Running metadata phase...");
 
-        match manifest::execute_metadata(metadata_phase, &tab).await {
+        match manifest::execute_metadata(metadata_phase, &tab, proxy).await {
             Ok(result) => {
                 channel_programmes = result.programmes_by_channel;
             }
@@ -332,7 +334,8 @@ pub async fn resolve_channel_content(
     println!("[source] Resolving content for '{}'...", channel_name);
 
     // Run content phase using the channel data we already have
-    let stream_info = manifest::execute_content(&manifest.content, tab, channel).await?;
+    let proxy = manifest.source.proxy.as_deref();
+    let stream_info = manifest::execute_content(&manifest.content, tab, channel, proxy).await?;
 
     println!(
         "[source] Content resolved for '{}': {}",

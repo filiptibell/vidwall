@@ -27,10 +27,11 @@ pub struct MetadataResult {
 pub async fn execute_metadata(
     phase: &MetadataPhase,
     tab: &ChromeBrowserTab,
+    proxy: Option<&str>,
 ) -> Result<MetadataResult> {
     let context = InterpolationContext::new();
 
-    let (_context, array_result) = execute_steps(&phase.steps, tab, context).await?;
+    let (_context, array_result) = execute_steps(&phase.steps, tab, context, proxy).await?;
 
     // We expect an array result from metadata extraction
     // Each item in the array represents a channel with nested programmes

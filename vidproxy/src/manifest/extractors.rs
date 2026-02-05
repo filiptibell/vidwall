@@ -15,7 +15,7 @@ pub type ExtractedArray = Vec<HashMap<String, Option<String>>>;
     Returns a single string value.
 */
 pub fn extract(extractor: &Extractor, content: &str, url: &str) -> Result<String> {
-    match extractor.kind {
+    let value = match extractor.kind {
         ExtractorKind::Url => Ok(url.to_string()),
         ExtractorKind::UrlRegex => extract_regex(extractor, url),
         ExtractorKind::JsonPath => extract_jsonpath(extractor, content),
@@ -27,7 +27,40 @@ pub fn extract(extractor: &Extractor, content: &str, url: &str) -> Result<String
         ExtractorKind::Regex => extract_regex(extractor, content),
         ExtractorKind::Line => extract_line(content),
         ExtractorKind::Pssh => extract_pssh(content, url),
+    }?;
+
+    // Apply unescaping if requested
+    if extractor.unescape {
+        Ok(unescape_json_string(&value))
+    } else {
+        Ok(value)
     }
+}
+
+/**
+    Unescape JSON string escape sequences.
+    Handles both \uXXXX and \\uXXXX sequences (e.g., \u0026 or \\u0026 -> &).
+    The double-backslash form is common in doubly-escaped JSON (JSON inside JSON).
+
+    Uses serde_json for proper JSON string parsing.
+*/
+fn unescape_json_string(s: &str) -> String {
+    // First, try to parse as a JSON string (wrapped in quotes)
+    let quoted = format!("\"{}\"", s);
+    if let Ok(serde_json::Value::String(unescaped)) = serde_json::from_str(&quoted) {
+        // If it still contains escape sequences (doubly-escaped), unescape again
+        if unescaped.contains("\\u") {
+            let quoted2 = format!("\"{}\"", unescaped);
+            if let Ok(serde_json::Value::String(double_unescaped)) = serde_json::from_str(&quoted2)
+            {
+                return double_unescaped;
+            }
+        }
+        return unescaped;
+    }
+
+    // If parsing fails, return the original string
+    s.to_string()
 }
 
 /**
@@ -471,6 +504,7 @@ mod tests {
             path: None,
             regex: None,
             each: None,
+            unescape: false,
         };
         let result = extract(&extractor, "body content", "https://example.com/test.mpd").unwrap();
         assert_eq!(result, "https://example.com/test.mpd");
@@ -483,6 +517,7 @@ mod tests {
             path: None,
             regex: None,
             each: None,
+            unescape: false,
         };
         let content = "some header\nabc123:def456\nmore stuff";
         let result = extract(&extractor, content, "").unwrap();
@@ -496,9 +531,58 @@ mod tests {
             path: Some(r"id=(\d+)".to_string()),
             regex: None,
             each: None,
+            unescape: false,
         };
         let result = extract(&extractor, "content?id=12345&other=value", "").unwrap();
         assert_eq!(result, "12345");
+    }
+
+    #[test]
+    fn test_unescape_json_string() {
+        // Test unicode escape sequences
+        assert_eq!(
+            unescape_json_string(r"https://example.com?a=1\u0026b=2"),
+            "https://example.com?a=1&b=2"
+        );
+
+        // Test multiple escapes
+        assert_eq!(
+            unescape_json_string(r"foo\u0026bar\u0026baz"),
+            "foo&bar&baz"
+        );
+
+        // Test doubly-escaped unicode (\\uXXXX -> character)
+        // This is common in JSON-inside-JSON like TikTok's SIGI_STATE
+        assert_eq!(
+            unescape_json_string(r"https://example.com?a=1\\u0026b=2"),
+            "https://example.com?a=1&b=2"
+        );
+
+        // Test other escape sequences
+        assert_eq!(unescape_json_string(r"line1\nline2"), "line1\nline2");
+        assert_eq!(unescape_json_string(r"tab\there"), "tab\there");
+        assert_eq!(unescape_json_string(r#"quote\"here"#), "quote\"here");
+        assert_eq!(unescape_json_string(r"back\\slash"), "back\\slash");
+
+        // Test no escapes
+        assert_eq!(
+            unescape_json_string("https://example.com"),
+            "https://example.com"
+        );
+    }
+
+    #[test]
+    fn test_extract_with_unescape() {
+        let extractor = Extractor {
+            kind: ExtractorKind::Regex,
+            path: Some(r"url=(https://[^\s]+)".to_string()),
+            regex: None,
+            each: None,
+            unescape: true,
+        };
+        let content = r"url=https://example.com?a=1\u0026b=2";
+        let result = extract(&extractor, content, "").unwrap();
+        assert_eq!(result, "https://example.com?a=1&b=2");
     }
 
     #[test]
@@ -513,6 +597,7 @@ mod tests {
             path: Some("$.items[*]".to_string()),
             regex: None,
             each: Some(each),
+            unescape: false,
         };
 
         let content = r#"{
@@ -560,6 +645,7 @@ mod tests {
             path: Some("$.result[*].content.epg[*]".to_string()),
             regex: None,
             each: Some(each),
+            unescape: false,
         };
 
         let content = r#"{

@@ -134,11 +134,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Spawn discovery tasks in background
-    for manifest in manifests {
-        let registry = Arc::clone(&registry);
-        let manifest_store = Arc::clone(&manifest_store);
-        tokio::spawn(async move {
+    // Run discovery tasks sequentially to avoid browser interference
+    // Each source gets its own browser, but running them in parallel can cause issues
+    let discovery_registry = Arc::clone(&registry);
+    let discovery_manifest_store = Arc::clone(&manifest_store);
+    tokio::spawn(async move {
+        for manifest in manifests {
             println!(
                 "[discovery] Starting source: {} ({})",
                 manifest.source.name, manifest.source.id
@@ -152,8 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "[discovery] Failed to create browser for '{}': {}",
                         manifest.source.id, e
                     );
-                    registry.mark_source_failed(&manifest.source.id, e.to_string());
-                    return;
+                    discovery_registry.mark_source_failed(&manifest.source.id, e.to_string());
+                    continue;
                 }
             };
 
@@ -163,11 +164,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let channel_count = result.channels.len();
 
                     // Store browser for later content resolution
-                    manifest_store
+                    discovery_manifest_store
                         .set_browser(&manifest.source.id, browser)
                         .await;
 
-                    registry.register_source(
+                    discovery_registry.register_source(
                         &result.source_id,
                         result.channels,
                         result.discovery_expires_at,
@@ -179,13 +180,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     eprintln!("[discovery] Source '{}' failed: {}", manifest.source.id, e);
-                    registry.mark_source_failed(&manifest.source.id, e.to_string());
+                    discovery_registry.mark_source_failed(&manifest.source.id, e.to_string());
                     // Close browser on failure
                     let _ = browser.close().await;
                 }
             }
-        });
-    }
+        }
+    });
 
     // Wait for Ctrl+C
     signal::ctrl_c().await?;
