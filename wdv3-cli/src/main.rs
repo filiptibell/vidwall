@@ -39,7 +39,7 @@ enum Command {
 
         /// License type: streaming (default), offline, or automatic.
         #[arg(short, long, default_value = "streaming")]
-        license_type: String,
+        license_type: wdv3::LicenseType,
 
         /// Enable privacy mode with a service certificate.
         /// Use "common" for Google's production cert, "staging" for Google's staging cert,
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
                 &device,
                 &pssh,
                 &url,
-                &license_type,
+                license_type,
                 privacy.as_deref(),
                 &headers,
             )
@@ -84,8 +84,8 @@ fn cmd_device(path: &PathBuf) -> Result<()> {
     let data = std::fs::read(path).context("failed to read WVD file")?;
     let device = wdv3::Device::from_bytes(&data).context("failed to parse WVD file")?;
 
-    println!("Device Type:     {:?}", device.device_type);
-    println!("Security Level:  {:?}", device.security_level);
+    println!("Device Type:     {}", device.device_type);
+    println!("Security Level:  {}", device.security_level);
 
     let client_id = &device.client_id;
 
@@ -154,7 +154,7 @@ async fn cmd_keys(
     device_path: &PathBuf,
     pssh_b64: &str,
     url: &str,
-    license_type: &str,
+    license_type: wdv3::LicenseType,
     privacy: Option<&str>,
     headers: &[String],
 ) -> Result<()> {
@@ -163,7 +163,7 @@ async fn cmd_keys(
     let device = wdv3::Device::from_bytes(&wvd_data).context("failed to parse WVD file")?;
 
     eprintln!(
-        "Loaded device: {:?} {:?}",
+        "Loaded device: {} {}",
         device.device_type, device.security_level
     );
 
@@ -198,10 +198,9 @@ async fn cmd_keys(
 
     // Parse PSSH and build challenge
     let pssh = wdv3::PsshBox::from_base64(pssh_b64).context("failed to parse PSSH box")?;
-    let lt = parse_license_type(license_type)?;
 
     let challenge = session
-        .build_license_challenge(&pssh, lt)
+        .build_license_challenge(&pssh, license_type)
         .context("failed to build license challenge")?;
     eprintln!("Built challenge ({} bytes)", challenge.len());
 
@@ -245,15 +244,6 @@ async fn cmd_keys(
     }
 
     Ok(())
-}
-
-fn parse_license_type(s: &str) -> Result<wdv3::LicenseType> {
-    match s.to_lowercase().as_str() {
-        "streaming" => Ok(wdv3::LicenseType::Streaming),
-        "offline" => Ok(wdv3::LicenseType::Offline),
-        "automatic" | "auto" => Ok(wdv3::LicenseType::Automatic),
-        _ => bail!("unknown license type '{s}' (expected: streaming, offline, automatic)"),
-    }
 }
 
 fn parse_header(s: &str) -> Result<(String, String)> {

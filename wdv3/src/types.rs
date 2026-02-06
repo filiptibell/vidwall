@@ -1,3 +1,9 @@
+use core::fmt;
+use core::str::FromStr;
+
+use crate::error::ParseError;
+use crate::utils::{eq_ignore_ascii_case, trim_ascii};
+
 /// Device type as encoded in WVD file byte offset 4.
 /// Values: Chrome=1, Android=2. These are defined by the WVD file format specification,
 /// not by Google's license_protocol.proto (the closest proto enum,
@@ -20,6 +26,39 @@ impl DeviceType {
 
     pub const fn to_u8(self) -> u8 {
         self as u8
+    }
+
+    pub const fn from_name(name: &[u8]) -> Option<Self> {
+        let name = trim_ascii(name);
+        match name.len() {
+            6 if eq_ignore_ascii_case(name, b"chrome") => Some(Self::Chrome),
+            7 if eq_ignore_ascii_case(name, b"android") => Some(Self::Android),
+            _ => None,
+        }
+    }
+
+    pub const fn to_name(self) -> &'static str {
+        match self {
+            Self::Chrome => "Chrome",
+            Self::Android => "Android",
+        }
+    }
+}
+
+impl fmt::Display for DeviceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.to_name())
+    }
+}
+
+impl FromStr for DeviceType {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s.as_bytes()).ok_or_else(|| ParseError {
+            kind: "device type",
+            value: s.to_owned(),
+        })
     }
 }
 
@@ -46,6 +85,47 @@ impl SecurityLevel {
     pub const fn to_u8(self) -> u8 {
         self as u8
     }
+
+    pub const fn from_name(name: &[u8]) -> Option<Self> {
+        let name = trim_ascii(name);
+        match name.len() {
+            1 => match name[0] {
+                b'1' => Some(Self::L1),
+                b'2' => Some(Self::L2),
+                b'3' => Some(Self::L3),
+                _ => None,
+            },
+            2 if eq_ignore_ascii_case(name, b"l1") => Some(Self::L1),
+            2 if eq_ignore_ascii_case(name, b"l2") => Some(Self::L2),
+            2 if eq_ignore_ascii_case(name, b"l3") => Some(Self::L3),
+            _ => None,
+        }
+    }
+
+    pub const fn to_name(self) -> &'static str {
+        match self {
+            Self::L1 => "L1",
+            Self::L2 => "L2",
+            Self::L3 => "L3",
+        }
+    }
+}
+
+impl fmt::Display for SecurityLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.to_name())
+    }
+}
+
+impl FromStr for SecurityLevel {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s.as_bytes()).ok_or_else(|| ParseError {
+            kind: "security level",
+            value: s.to_owned(),
+        })
+    }
 }
 
 /// Key type enumeration from License.KeyContainer.KeyType.
@@ -65,19 +145,6 @@ pub enum KeyType {
     OemContent = 6,
 }
 
-impl std::fmt::Display for KeyType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Signing => write!(f, "SIGNING"),
-            Self::Content => write!(f, "CONTENT"),
-            Self::KeyControl => write!(f, "KEY_CONTROL"),
-            Self::OperatorSession => write!(f, "OPERATOR_SESSION"),
-            Self::Entitlement => write!(f, "ENTITLEMENT"),
-            Self::OemContent => write!(f, "OEM_CONTENT"),
-        }
-    }
-}
-
 impl KeyType {
     pub const fn from_u8(u: u8) -> Option<Self> {
         match u {
@@ -93,6 +160,47 @@ impl KeyType {
 
     pub const fn to_u8(self) -> u8 {
         self as u8
+    }
+
+    pub const fn from_name(name: &[u8]) -> Option<Self> {
+        let name = trim_ascii(name);
+        match name.len() {
+            7 if eq_ignore_ascii_case(name, b"signing") => Some(Self::Signing),
+            7 if eq_ignore_ascii_case(name, b"content") => Some(Self::Content),
+            11 if eq_ignore_ascii_case(name, b"key_control") => Some(Self::KeyControl),
+            11 if eq_ignore_ascii_case(name, b"oem_content") => Some(Self::OemContent),
+            11 if eq_ignore_ascii_case(name, b"entitlement") => Some(Self::Entitlement),
+            16 if eq_ignore_ascii_case(name, b"operator_session") => Some(Self::OperatorSession),
+            _ => None,
+        }
+    }
+
+    pub const fn to_name(&self) -> &'static str {
+        match self {
+            Self::Signing => "SIGNING",
+            Self::Content => "CONTENT",
+            Self::KeyControl => "KEY_CONTROL",
+            Self::OperatorSession => "OPERATOR_SESSION",
+            Self::Entitlement => "ENTITLEMENT",
+            Self::OemContent => "OEM_CONTENT",
+        }
+    }
+}
+
+impl fmt::Display for KeyType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.to_name())
+    }
+}
+
+impl FromStr for KeyType {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s.as_bytes()).ok_or_else(|| ParseError {
+            kind: "key type",
+            value: s.to_owned(),
+        })
     }
 }
 
@@ -136,6 +244,44 @@ pub enum LicenseType {
     Offline,
     /// License type decision is left to the provider.
     Automatic,
+}
+
+impl LicenseType {
+    pub const fn from_name(name: &[u8]) -> Option<Self> {
+        let name = trim_ascii(name);
+        match name.len() {
+            4 if eq_ignore_ascii_case(name, b"auto") => Some(Self::Automatic),
+            7 if eq_ignore_ascii_case(name, b"offline") => Some(Self::Offline),
+            9 if eq_ignore_ascii_case(name, b"streaming") => Some(Self::Streaming),
+            9 if eq_ignore_ascii_case(name, b"automatic") => Some(Self::Automatic),
+            _ => None,
+        }
+    }
+
+    pub const fn to_name(&self) -> &'static str {
+        match self {
+            Self::Streaming => "streaming",
+            Self::Offline => "offline",
+            Self::Automatic => "automatic",
+        }
+    }
+}
+
+impl fmt::Display for LicenseType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.to_name())
+    }
+}
+
+impl FromStr for LicenseType {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s.as_bytes()).ok_or_else(|| ParseError {
+            kind: "license type",
+            value: s.to_owned(),
+        })
+    }
 }
 
 type ProtoLicenseType = wdv3_proto::LicenseType;
@@ -191,14 +337,14 @@ impl ContentKey {
     }
 }
 
-impl std::fmt::Display for ContentKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ContentKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", hex::encode(self.kid), hex::encode(&self.key))
     }
 }
 
-impl std::fmt::Debug for ContentKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ContentKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "[{}] {}:{}",
@@ -318,5 +464,127 @@ mod tests {
             let back: KeyType = proto.into();
             assert_eq!(back, kt);
         }
+    }
+
+    #[test]
+    fn device_type_name_round_trip() {
+        for dt in [DeviceType::Chrome, DeviceType::Android] {
+            let name = dt.to_name();
+            let parsed = DeviceType::from_name(name.as_bytes()).unwrap();
+            assert_eq!(parsed, dt);
+        }
+    }
+
+    #[test]
+    fn device_type_from_name_case_insensitive() {
+        assert_eq!(DeviceType::from_name(b"chrome"), Some(DeviceType::Chrome));
+        assert_eq!(DeviceType::from_name(b"CHROME"), Some(DeviceType::Chrome));
+        assert_eq!(DeviceType::from_name(b"Chrome"), Some(DeviceType::Chrome));
+        assert_eq!(DeviceType::from_name(b"ANDROID"), Some(DeviceType::Android));
+        assert_eq!(DeviceType::from_name(b"android"), Some(DeviceType::Android));
+        assert_eq!(DeviceType::from_name(b"unknown"), None);
+        assert_eq!(DeviceType::from_name(b""), None);
+    }
+
+    #[test]
+    fn security_level_name_round_trip() {
+        for sl in [SecurityLevel::L1, SecurityLevel::L2, SecurityLevel::L3] {
+            let name = sl.to_name();
+            let parsed = SecurityLevel::from_name(name.as_bytes()).unwrap();
+            assert_eq!(parsed, sl);
+        }
+    }
+
+    #[test]
+    fn security_level_from_name_bare_digits() {
+        assert_eq!(SecurityLevel::from_name(b"1"), Some(SecurityLevel::L1));
+        assert_eq!(SecurityLevel::from_name(b"2"), Some(SecurityLevel::L2));
+        assert_eq!(SecurityLevel::from_name(b"3"), Some(SecurityLevel::L3));
+        assert_eq!(SecurityLevel::from_name(b"0"), None);
+        assert_eq!(SecurityLevel::from_name(b"4"), None);
+    }
+
+    #[test]
+    fn security_level_from_name_case_insensitive() {
+        assert_eq!(SecurityLevel::from_name(b"l1"), Some(SecurityLevel::L1));
+        assert_eq!(SecurityLevel::from_name(b"L1"), Some(SecurityLevel::L1));
+        assert_eq!(SecurityLevel::from_name(b"L3"), Some(SecurityLevel::L3));
+        assert_eq!(SecurityLevel::from_name(b"l3"), Some(SecurityLevel::L3));
+        assert_eq!(SecurityLevel::from_name(b""), None);
+    }
+
+    #[test]
+    fn key_type_name_round_trip() {
+        let variants = [
+            KeyType::Signing,
+            KeyType::Content,
+            KeyType::KeyControl,
+            KeyType::OperatorSession,
+            KeyType::Entitlement,
+            KeyType::OemContent,
+        ];
+        for kt in variants {
+            let name = kt.to_name();
+            let parsed = KeyType::from_name(name.as_bytes()).unwrap();
+            assert_eq!(parsed, kt);
+        }
+    }
+
+    #[test]
+    fn key_type_from_name_case_insensitive() {
+        assert_eq!(KeyType::from_name(b"signing"), Some(KeyType::Signing));
+        assert_eq!(KeyType::from_name(b"CONTENT"), Some(KeyType::Content));
+        assert_eq!(
+            KeyType::from_name(b"key_control"),
+            Some(KeyType::KeyControl)
+        );
+        assert_eq!(
+            KeyType::from_name(b"Operator_Session"),
+            Some(KeyType::OperatorSession)
+        );
+        assert_eq!(
+            KeyType::from_name(b"oem_content"),
+            Some(KeyType::OemContent)
+        );
+        assert_eq!(KeyType::from_name(b"nope"), None);
+    }
+
+    #[test]
+    fn license_type_name_round_trip() {
+        for lt in [
+            LicenseType::Streaming,
+            LicenseType::Offline,
+            LicenseType::Automatic,
+        ] {
+            let name = lt.to_name();
+            let parsed = LicenseType::from_name(name.as_bytes()).unwrap();
+            assert_eq!(parsed, lt);
+        }
+    }
+
+    #[test]
+    fn license_type_from_name_alias_auto() {
+        assert_eq!(
+            LicenseType::from_name(b"auto"),
+            Some(LicenseType::Automatic)
+        );
+        assert_eq!(
+            LicenseType::from_name(b"AUTO"),
+            Some(LicenseType::Automatic)
+        );
+        assert_eq!(
+            LicenseType::from_name(b"automatic"),
+            Some(LicenseType::Automatic)
+        );
+        assert_eq!(
+            LicenseType::from_name(b"STREAMING"),
+            Some(LicenseType::Streaming)
+        );
+        assert_eq!(
+            LicenseType::from_name(b"Offline"),
+            Some(LicenseType::Offline)
+        );
+        assert_eq!(LicenseType::from_name(b""), None);
+        assert_eq!(LicenseType::from_name(b"bad"), None);
     }
 }

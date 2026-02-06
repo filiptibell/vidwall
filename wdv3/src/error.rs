@@ -64,3 +64,11 @@ pub enum CdmError {
 
 /// Type alias for results that may return a [`CdmError`].
 pub type CdmResult<T> = std::result::Result<T, CdmError>;
+
+/// Error returned by `FromStr` implementations on enum types.
+#[derive(Debug, Clone, Error)]
+#[error("unknown {kind} '{value}'")]
+pub struct ParseError {
+    pub kind: &'static str,
+    pub value: String,
+}
