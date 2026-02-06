@@ -1,20 +1,5 @@
 use anyhow::{Result, anyhow};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
-
-const CDRM_API_URL: &str = "https://cdrm-project.com/api/decrypt";
-
-#[derive(Debug, Serialize)]
-struct CdrmRequest {
-    pssh: String,
-    licurl: String,
-    headers: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CdrmResponse {
-    message: String,
-}
 
 /**
     Extract PSSH and default_KID from an MPD manifest
@@ -59,51 +44,86 @@ fn extract_default_kid_from_mpd(mpd_content: &str) -> Option<String> {
 }
 
 /**
-    Fetch all decryption keys from CDRM API.
-
-    Returns all keys in "kid:key" format.
+    Attempt to fetch a service certificate from the license server and set it
+    on the session for privacy mode. Returns Ok if privacy mode was enabled,
+    or an error if it couldn't be enabled (caller should fall back to plaintext).
 */
-pub async fn fetch_decryption_keys(pssh: &str, license_url: &str) -> Result<Vec<String>> {
-    println!("[cdrm] Requesting decryption keys from CDRM API...");
+async fn try_enable_privacy_mode(session: &mut wdv3::Session, license_url: &str) -> Result<()> {
+    let cert_request = wdv3::Session::service_certificate_request();
+    let cert_response = license_request(license_url, cert_request).await?;
+    session
+        .set_service_certificate(&cert_response)
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(())
+}
 
+/**
+    POST raw bytes to the license server and return the response body.
+*/
+async fn license_request(license_url: &str, body: Vec<u8>) -> Result<Vec<u8>> {
     let client = reqwest::Client::new();
-    let cdrm_req = CdrmRequest {
-        pssh: pssh.to_string(),
-        licurl: license_url.to_string(),
-        headers: format!(
-            "{:?}",
-            std::collections::HashMap::from([
-                (
-                    "User-Agent",
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-                ),
-                ("Accept", "*/*"),
-            ])
-        ),
-    };
-
-    let resp = client.post(CDRM_API_URL).json(&cdrm_req).send().await?;
+    let resp = client
+        .post(license_url)
+        .header("Content-Type", "application/octet-stream")
+        .body(body)
+        .send()
+        .await?;
 
     if !resp.status().is_success() {
-        return Err(anyhow!("CDRM API error: {}", resp.status()));
+        return Err(anyhow!("License server error: {}", resp.status()));
     }
 
-    let cdrm_resp: CdrmResponse = resp.json().await?;
+    Ok(resp.bytes().await?.to_vec())
+}
 
-    // Extract all keys (format is "kid:key" per line)
-    let keys: Vec<String> = cdrm_resp
-        .message
-        .lines()
-        .filter(|line| line.contains(':') && line.len() > 32)
-        .map(|s| s.to_string())
+/**
+    Fetch decryption keys by performing local Widevine license acquisition.
+
+    Fetches the server's service certificate first (for privacy mode), then
+    builds a license challenge using a random embedded CDM device, POSTs it to the
+    license server, and extracts content keys from the response.
+
+    Returns all content keys in "kid:key" hex format.
+*/
+pub async fn fetch_decryption_keys(pssh_b64: &str, license_url: &str) -> Result<Vec<String>> {
+    println!("[cdrm] Performing local license acquisition...");
+
+    let pssh =
+        wdv3::PsshBox::from_base64(pssh_b64).map_err(|e| anyhow!("Failed to parse PSSH: {e}"))?;
+
+    let device = wdv3::static_devices::random();
+    let mut session = wdv3::Session::new(device);
+
+    // Try to enable privacy mode by fetching the server's service certificate.
+    // If the server doesn't support it or the cert fails to parse, fall back
+    // to non-privacy mode (plaintext ClientIdentification).
+    match try_enable_privacy_mode(&mut session, license_url).await {
+        Ok(()) => println!("[cdrm] Privacy mode enabled"),
+        Err(e) => println!("[cdrm] Privacy mode unavailable, using plaintext: {e}"),
+    }
+
+    // Build and send the license challenge
+    let challenge = session
+        .build_license_challenge(&pssh, wdv3::LicenseType::Streaming)
+        .map_err(|e| anyhow!("Failed to build license challenge: {e}"))?;
+
+    let response_bytes = license_request(license_url, challenge).await?;
+    let keys = session
+        .parse_license_response(&response_bytes)
+        .map_err(|e| anyhow!("Failed to parse license response: {e}"))?;
+
+    let content_keys: Vec<String> = keys
+        .iter()
+        .filter(|k| k.key_type == wdv3::KeyType::Content)
+        .map(|k| format!("{}:{}", k.kid_hex(), k.key_hex()))
         .collect();
 
-    if keys.is_empty() {
-        return Err(anyhow!("No decryption keys found in CDRM response"));
+    if content_keys.is_empty() {
+        return Err(anyhow!("No content keys found in license response"));
     }
 
-    println!("[cdrm] Got {} decryption key(s)", keys.len());
-    Ok(keys)
+    println!("[cdrm] Got {} content key(s)", content_keys.len());
+    Ok(content_keys)
 }
 
 /**
