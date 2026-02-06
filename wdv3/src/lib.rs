@@ -17,3 +17,4 @@ pub use self::error::{CdmError, CdmResult, ParseError};
 pub use self::pssh::PsshBox;
 pub use self::session::Session;
 pub use self::types::{ContentKey, DeviceType, KeyType, LicenseType, SecurityLevel, SystemId};
+pub use self::utils::{ParseKid, parse_kid};
