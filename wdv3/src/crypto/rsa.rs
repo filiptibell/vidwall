@@ -88,3 +88,69 @@ pub fn rsa_oaep_sha1_encrypt(public_key_der: &[u8], plaintext: &[u8]) -> Result<
         .encrypt_with_rng(&mut rng, plaintext)
         .map_err(|e| CdmError::RsaOperation(e.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPublicKey};
+    use signature::Verifier;
+
+    fn test_private_key() -> RsaPrivateKey {
+        let wvd = include_bytes!("../../testfiles/device.wvd");
+        // Parse private key from WVD: skip header (9 bytes), read pk_len at [7..9]
+        let pk_len = u16::from_be_bytes([wvd[7], wvd[8]]) as usize;
+        RsaPrivateKey::from_pkcs1_der(&wvd[9..9 + pk_len]).unwrap()
+    }
+
+    #[test]
+    fn pss_sign_produces_verifiable_signature() {
+        let key = test_private_key();
+        let message = b"test license request bytes";
+        let sig_bytes = rsa_pss_sha1_sign(&key, message).unwrap();
+
+        // Verify with the corresponding public key
+        let pub_key = key.to_public_key();
+        let verifying_key = pss::VerifyingKey::<Sha1>::new_with_salt_len(pub_key, 20);
+        let signature = pss::Signature::try_from(sig_bytes.as_slice()).unwrap();
+        verifying_key.verify(message, &signature).unwrap();
+    }
+
+    #[test]
+    fn pss_sign_is_nondeterministic() {
+        let key = test_private_key();
+        let message = b"same message";
+        let sig1 = rsa_pss_sha1_sign(&key, message).unwrap();
+        let sig2 = rsa_pss_sha1_sign(&key, message).unwrap();
+        // PSS uses random salt, so two signatures of the same message should differ
+        assert_ne!(sig1, sig2);
+    }
+
+    #[test]
+    fn oaep_encrypt_decrypt_round_trip() {
+        let key = test_private_key();
+        let pub_der = key.to_public_key().to_pkcs1_der().unwrap();
+
+        let plaintext = b"sixteen byte!!!"; // 15 bytes, well within OAEP limit
+        let ciphertext = rsa_oaep_sha1_encrypt(pub_der.as_bytes(), plaintext).unwrap();
+
+        // Ciphertext should be key-size bytes (2048-bit = 256 bytes)
+        assert_eq!(ciphertext.len(), 256);
+
+        let decrypted = rsa_oaep_sha1_decrypt(&key, &ciphertext).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn oaep_decrypt_garbage_fails() {
+        let key = test_private_key();
+        let garbage = vec![0xFFu8; 256];
+        let err = rsa_oaep_sha1_decrypt(&key, &garbage).unwrap_err();
+        assert!(matches!(err, CdmError::RsaOperation(_)));
+    }
+
+    #[test]
+    fn oaep_encrypt_bad_public_key_fails() {
+        let err = rsa_oaep_sha1_encrypt(b"not-a-der-key", b"data").unwrap_err();
+        assert!(matches!(err, CdmError::RsaKeyParse(_)));
+    }
+}

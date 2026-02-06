@@ -40,10 +40,16 @@ impl Device {
             return Err(CdmError::WvdBadMagic);
         }
 
-        // Check version, device type, security level
-        let version = *data.get(4).ok_or(CdmError::WvdTruncated)?;
-        let device_type = *data.get(5).ok_or(CdmError::WvdTruncated)?;
-        let security_level = *data.get(6).ok_or(CdmError::WvdTruncated)?;
+        // Header layout (matches to_bytes):
+        //   [0..3]  magic "WVD"
+        //   [3]     version
+        //   [4]     device_type
+        //   [5]     security_level
+        //   [6]     flags (reserved, ignored)
+        //   [7..9]  private_key_len (u16 big-endian)
+        let version = *data.get(3).ok_or(CdmError::WvdTruncated)?;
+        let device_type = *data.get(4).ok_or(CdmError::WvdTruncated)?;
+        let security_level = *data.get(5).ok_or(CdmError::WvdTruncated)?;
 
         if version != 2 {
             return Err(CdmError::WvdUnsupportedVersion(version));
@@ -133,5 +139,96 @@ impl Device {
     /// Serialize to a base64-encoded WVD string.
     pub fn to_base64(&self) -> CdmResult<String> {
         self.to_bytes().map(|b| data_encoding::BASE64.encode(&b))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_WVD: &[u8] = include_bytes!("../testfiles/device.wvd");
+
+    #[test]
+    fn parse_test_device() {
+        let device = Device::from_bytes(TEST_WVD).expect("failed to parse test WVD");
+        assert_eq!(device.device_type, DeviceType::Android);
+        assert_eq!(device.security_level, SecurityLevel::L3);
+    }
+
+    #[test]
+    fn round_trip() {
+        let device = Device::from_bytes(TEST_WVD).unwrap();
+        let serialized = device.to_bytes().unwrap();
+        let device2 = Device::from_bytes(&serialized).unwrap();
+        assert_eq!(device2.device_type, device.device_type);
+        assert_eq!(device2.security_level, device.security_level);
+        assert_eq!(device2.private_key, device.private_key);
+        assert_eq!(
+            device2.client_id.encode_to_vec(),
+            device.client_id.encode_to_vec()
+        );
+    }
+
+    #[test]
+    fn base64_round_trip() {
+        let device = Device::from_bytes(TEST_WVD).unwrap();
+        let b64 = device.to_base64().unwrap();
+        let device2 = Device::from_base64(&b64).unwrap();
+        assert_eq!(device2.device_type, device.device_type);
+        assert_eq!(device2.security_level, device.security_level);
+    }
+
+    #[test]
+    fn client_id_has_metadata() {
+        let device = Device::from_bytes(TEST_WVD).unwrap();
+        // The test device should have client_info populated
+        assert!(
+            !device.client_id.client_info.is_empty(),
+            "client_info should not be empty"
+        );
+    }
+
+    #[test]
+    fn bad_magic() {
+        let mut data = TEST_WVD.to_vec();
+        data[0] = b'X';
+        let err = Device::from_bytes(&data).unwrap_err();
+        assert!(matches!(err, CdmError::WvdBadMagic));
+    }
+
+    #[test]
+    fn wrong_version() {
+        let mut data = TEST_WVD.to_vec();
+        data[3] = 99; // version byte
+        let err = Device::from_bytes(&data).unwrap_err();
+        assert!(matches!(err, CdmError::WvdUnsupportedVersion(99)));
+    }
+
+    #[test]
+    fn bad_device_type() {
+        let mut data = TEST_WVD.to_vec();
+        data[4] = 0; // invalid device type
+        let err = Device::from_bytes(&data).unwrap_err();
+        assert!(matches!(err, CdmError::WvdBadDeviceType(0)));
+    }
+
+    #[test]
+    fn bad_security_level() {
+        let mut data = TEST_WVD.to_vec();
+        data[5] = 9; // invalid security level
+        let err = Device::from_bytes(&data).unwrap_err();
+        assert!(matches!(err, CdmError::WvdBadSecurityLevel(9)));
+    }
+
+    #[test]
+    fn truncated_input() {
+        let err = Device::from_bytes(b"WVD").unwrap_err();
+        assert!(matches!(err, CdmError::WvdTruncated));
+    }
+
+    #[test]
+    fn empty_input() {
+        let err = Device::from_bytes(b"").unwrap_err();
+        assert!(matches!(err, CdmError::WvdBadMagic));
     }
 }

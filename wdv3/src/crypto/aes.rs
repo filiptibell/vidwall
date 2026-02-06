@@ -156,3 +156,85 @@ fn prefixed(counter: u8, context: &[u8]) -> Vec<u8> {
     msg.extend_from_slice(context);
     msg
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::padding::{pkcs7_pad, pkcs7_unpad};
+
+    #[test]
+    fn enc_context_format() {
+        let ctx = build_enc_context(b"req");
+        // Starts with "ENCRYPTION\0"
+        assert!(ctx.starts_with(b"ENCRYPTION\x00"));
+        // Contains the request bytes
+        assert_eq!(&ctx[11..14], b"req");
+        // Ends with the 128-bit length trailer
+        assert_eq!(&ctx[ctx.len() - 4..], &[0x00, 0x00, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn mac_context_format() {
+        let ctx = build_mac_context(b"req");
+        assert!(ctx.starts_with(b"AUTHENTICATION\x00"));
+        assert_eq!(&ctx[15..18], b"req");
+        assert_eq!(&ctx[ctx.len() - 4..], &[0x00, 0x00, 0x02, 0x00]);
+    }
+
+    #[test]
+    fn cbc_encrypt_decrypt_round_trip() {
+        let key = [0x42u8; 16];
+        let iv = [0x13u8; 16];
+        let plaintext = b"hello world 1234"; // exactly one block
+        let padded = pkcs7_pad(plaintext, 16);
+        let ciphertext = aes_cbc_encrypt(&key, &iv, &padded);
+        assert_ne!(ciphertext, padded); // actually encrypted
+        let decrypted = aes_cbc_decrypt_key(&key, &iv, &ciphertext).unwrap();
+        let unpadded = pkcs7_unpad(&decrypted, 16).unwrap();
+        assert_eq!(unpadded, plaintext);
+    }
+
+    #[test]
+    fn cbc_multi_block_round_trip() {
+        let key = [0xAA; 16];
+        let iv = [0xBB; 16];
+        let data = b"this is more than sixteen bytes of plaintext data!!";
+        let padded = pkcs7_pad(data, 16);
+        let ciphertext = aes_cbc_encrypt(&key, &iv, &padded);
+        let decrypted = aes_cbc_decrypt_key(&key, &iv, &ciphertext).unwrap();
+        let unpadded = pkcs7_unpad(&decrypted, 16).unwrap();
+        assert_eq!(unpadded, data);
+    }
+
+    #[test]
+    fn cbc_decrypt_bad_iv_len() {
+        let key = [0u8; 16];
+        let err = aes_cbc_decrypt_key(&key, &[0u8; 15], &[0u8; 16]).unwrap_err();
+        assert!(matches!(err, CdmError::AesCbcInvalidInput(_)));
+    }
+
+    #[test]
+    fn cbc_decrypt_empty_ciphertext() {
+        let key = [0u8; 16];
+        let err = aes_cbc_decrypt_key(&key, &[0u8; 16], &[]).unwrap_err();
+        assert!(matches!(err, CdmError::AesCbcInvalidInput(_)));
+    }
+
+    #[test]
+    fn cbc_decrypt_unaligned_ciphertext() {
+        let key = [0u8; 16];
+        let err = aes_cbc_decrypt_key(&key, &[0u8; 16], &[0u8; 17]).unwrap_err();
+        assert!(matches!(err, CdmError::AesCbcInvalidInput(_)));
+    }
+
+    #[test]
+    fn derive_keys_produces_distinct_keys() {
+        let session_key = [0x01u8; 16];
+        let enc_ctx = build_enc_context(b"test-request");
+        let mac_ctx = build_mac_context(b"test-request");
+        let dk = derive_keys(&enc_ctx, &mac_ctx, &session_key).unwrap();
+        // All three derived keys should be different
+        assert_ne!(dk.enc_key.as_slice(), &dk.mac_key_server[..16]);
+        assert_ne!(dk.mac_key_server, dk.mac_key_client);
+    }
+}

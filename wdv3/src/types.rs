@@ -222,3 +222,101 @@ pub(crate) struct DerivedKeys {
     #[allow(dead_code)]
     pub(crate) mac_key_client: [u8; 32],
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+
+    fn sample_key() -> ContentKey {
+        ContentKey {
+            kid: hex!("00000000000000000000000000000001"),
+            key: vec![0xab, 0xcd, 0xef, 0x01],
+            key_type: KeyType::Content,
+        }
+    }
+
+    #[test]
+    fn content_key_display() {
+        let key = sample_key();
+        let s = format!("{key}");
+        assert_eq!(s, "00000000000000000000000000000001:abcdef01");
+    }
+
+    #[test]
+    fn content_key_debug() {
+        let key = sample_key();
+        let s = format!("{key:?}");
+        assert_eq!(s, "[CONTENT] 00000000000000000000000000000001:abcdef01");
+    }
+
+    #[test]
+    fn content_key_debug_signing() {
+        let key = ContentKey {
+            kid: [0xFF; 16],
+            key: vec![0x00],
+            key_type: KeyType::Signing,
+        };
+        let s = format!("{key:?}");
+        assert!(s.starts_with("[SIGNING]"));
+    }
+
+    #[test]
+    fn content_key_hex_accessors() {
+        let key = sample_key();
+        assert_eq!(key.kid_hex(), "00000000000000000000000000000001");
+        assert_eq!(key.key_hex(), "abcdef01");
+    }
+
+    #[test]
+    fn key_type_display() {
+        assert_eq!(format!("{}", KeyType::Content), "CONTENT");
+        assert_eq!(format!("{}", KeyType::Signing), "SIGNING");
+        assert_eq!(format!("{}", KeyType::KeyControl), "KEY_CONTROL");
+        assert_eq!(format!("{}", KeyType::OperatorSession), "OPERATOR_SESSION");
+        assert_eq!(format!("{}", KeyType::Entitlement), "ENTITLEMENT");
+        assert_eq!(format!("{}", KeyType::OemContent), "OEM_CONTENT");
+    }
+
+    #[test]
+    fn device_type_round_trip() {
+        for val in [1u8, 2] {
+            let dt = DeviceType::from_u8(val).unwrap();
+            assert_eq!(dt.to_u8(), val);
+        }
+        assert!(DeviceType::from_u8(0).is_none());
+        assert!(DeviceType::from_u8(3).is_none());
+    }
+
+    #[test]
+    fn security_level_round_trip() {
+        for val in [1u8, 2, 3] {
+            let sl = SecurityLevel::from_u8(val).unwrap();
+            assert_eq!(sl.to_u8(), val);
+        }
+        assert!(SecurityLevel::from_u8(0).is_none());
+        assert!(SecurityLevel::from_u8(4).is_none());
+    }
+
+    #[test]
+    fn license_type_default_is_streaming() {
+        assert_eq!(LicenseType::default(), LicenseType::Streaming);
+    }
+
+    #[test]
+    fn key_type_proto_round_trip() {
+        let variants = [
+            KeyType::Signing,
+            KeyType::Content,
+            KeyType::KeyControl,
+            KeyType::OperatorSession,
+            KeyType::Entitlement,
+            KeyType::OemContent,
+        ];
+        for kt in variants {
+            let proto: ProtoKeyType = kt.into();
+            let back: KeyType = proto.into();
+            assert_eq!(back, kt);
+        }
+    }
+}

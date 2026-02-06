@@ -37,3 +37,69 @@ pub fn pkcs7_pad(data: &[u8], block_size: usize) -> Vec<u8> {
     out.resize(data.len() + pad, pad as u8);
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pad_unpad_round_trip() {
+        for len in 0..=48 {
+            let data: Vec<u8> = (0..len).map(|i| i as u8).collect();
+            let padded = pkcs7_pad(&data, 16);
+            assert!(padded.len().is_multiple_of(16));
+            assert!(padded.len() > data.len());
+            let unpadded = pkcs7_unpad(&padded, 16).unwrap();
+            assert_eq!(unpadded, data);
+        }
+    }
+
+    #[test]
+    fn pad_exact_block_adds_full_block() {
+        // When data is exactly block-aligned, a full block of padding is added
+        let data = [0u8; 16];
+        let padded = pkcs7_pad(&data, 16);
+        assert_eq!(padded.len(), 32);
+        assert!(padded[16..].iter().all(|&b| b == 16));
+    }
+
+    #[test]
+    fn unpad_empty_fails() {
+        let err = pkcs7_unpad(&[], 16).unwrap_err();
+        assert!(matches!(err, CdmError::Pkcs7PaddingInvalid));
+    }
+
+    #[test]
+    fn unpad_bad_pad_value_zero() {
+        let mut block = [0u8; 16];
+        block[15] = 0; // pad value 0 is invalid
+        let err = pkcs7_unpad(&block, 16).unwrap_err();
+        assert!(matches!(err, CdmError::Pkcs7PaddingInvalid));
+    }
+
+    #[test]
+    fn unpad_bad_pad_value_too_large() {
+        let mut block = [0u8; 16];
+        block[15] = 17; // larger than block size
+        let err = pkcs7_unpad(&block, 16).unwrap_err();
+        assert!(matches!(err, CdmError::Pkcs7PaddingInvalid));
+    }
+
+    #[test]
+    fn unpad_inconsistent_padding() {
+        // Last byte says 4, but not all 4 trailing bytes match
+        let mut block = [0u8; 16];
+        block[15] = 4;
+        block[14] = 4;
+        block[13] = 4;
+        block[12] = 99; // should be 4
+        let err = pkcs7_unpad(&block, 16).unwrap_err();
+        assert!(matches!(err, CdmError::Pkcs7PaddingInvalid));
+    }
+
+    #[test]
+    fn unpad_not_block_aligned() {
+        let err = pkcs7_unpad(&[0u8; 15], 16).unwrap_err();
+        assert!(matches!(err, CdmError::Pkcs7PaddingInvalid));
+    }
+}

@@ -417,3 +417,276 @@ fn kid_to_uuid(kid: &[u8]) -> [u8; 16] {
     uuid[..len].copy_from_slice(&kid[..len]);
     uuid
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+    use prost::Message;
+    use wdv3_proto::license_request::content_identification::ContentIdVariant;
+
+    const TEST_WVD: &[u8] = include_bytes!("../testfiles/device.wvd");
+    const TEST_CERT: &[u8] = include_bytes!("../testfiles/application-certificate");
+
+    fn test_device() -> Device {
+        Device::from_bytes(TEST_WVD).expect("failed to parse test WVD")
+    }
+
+    /// Build a minimal v0 Widevine PSSH box wrapping a WidevinePsshData proto.
+    fn test_pssh() -> PsshBox {
+        let kid = hex!("00000000000000000000000000000001");
+        let pssh_data = wdv3_proto::WidevinePsshData {
+            key_ids: vec![kid.to_vec()],
+            ..Default::default()
+        };
+        let data = pssh_data.encode_to_vec();
+
+        let wv_sysid = hex!("edef8ba979d64acea3c827dcd51d21ed");
+        let box_size = (32 + data.len()) as u32;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&box_size.to_be_bytes());
+        buf.extend_from_slice(b"pssh");
+        buf.push(0);
+        buf.extend_from_slice(&[0, 0, 0]);
+        buf.extend_from_slice(&wv_sysid);
+        buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&data);
+
+        PsshBox::from_bytes(&buf).unwrap()
+    }
+
+    // ── kid_to_uuid ───────────────────────────────────────────────────
+
+    #[test]
+    fn kid_to_uuid_raw_16_bytes() {
+        let kid = hex!("aabbccddaabbccddaabbccddaabbccdd");
+        assert_eq!(kid_to_uuid(&kid), kid);
+    }
+
+    #[test]
+    fn kid_to_uuid_pads_short() {
+        let kid = [0xAA, 0xBB];
+        let result = kid_to_uuid(&kid);
+        assert_eq!(result[0], 0xAA);
+        assert_eq!(result[1], 0xBB);
+        assert!(result[2..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn kid_to_uuid_truncates_long() {
+        let kid = [0xFF; 20];
+        let result = kid_to_uuid(&kid);
+        assert_eq!(result, [0xFF; 16]);
+    }
+
+    #[test]
+    fn kid_to_uuid_decimal_string() {
+        // Decimal "1" → big-endian u128 → [0..0, 1]
+        let result = kid_to_uuid(b"1");
+        let mut expected = [0u8; 16];
+        expected[15] = 1;
+        assert_eq!(result, expected);
+    }
+
+    // ── Session creation ──────────────────────────────────────────────
+
+    #[test]
+    fn session_numbers_are_monotonic() {
+        let device = test_device();
+        let s1 = Session::new(device.clone());
+        let s2 = Session::new(device);
+        assert!(s2.number() > s1.number());
+    }
+
+    #[test]
+    fn new_session_has_no_keys() {
+        let session = Session::new(test_device());
+        assert!(session.keys().is_empty());
+        assert!(session.content_keys().is_empty());
+    }
+
+    // ── Challenge building ────────────────────────────────────────────
+
+    #[test]
+    fn build_challenge_produces_valid_signed_message() {
+        let mut session = Session::new(test_device());
+        let pssh = test_pssh();
+        let challenge = session
+            .build_license_challenge(&pssh, LicenseType::Streaming)
+            .unwrap();
+
+        // Should decode as a SignedMessage
+        let signed = SignedMessage::decode(challenge.as_slice()).unwrap();
+        assert_eq!(signed.r#type, Some(MessageType::LicenseRequest as i32));
+        assert!(signed.msg.is_some());
+        assert!(signed.signature.is_some());
+
+        // The msg should decode as a LicenseRequest
+        let lr = LicenseRequest::decode(signed.msg.unwrap().as_slice()).unwrap();
+        assert_eq!(
+            lr.r#type,
+            Some(wdv3_proto::license_request::RequestType::New as i32)
+        );
+        assert_eq!(lr.protocol_version, Some(21));
+        assert!(lr.request_time.is_some());
+        assert!(lr.key_control_nonce.is_some());
+
+        // Nonce should be in valid range [1, 2^31)
+        let nonce = lr.key_control_nonce.unwrap();
+        assert!((1..2_147_483_648).contains(&nonce));
+    }
+
+    #[test]
+    fn challenge_contains_pssh_data() {
+        let mut session = Session::new(test_device());
+        let pssh = test_pssh();
+        let challenge = session
+            .build_license_challenge(&pssh, LicenseType::Streaming)
+            .unwrap();
+
+        let signed = SignedMessage::decode(challenge.as_slice()).unwrap();
+        let lr = LicenseRequest::decode(signed.msg.unwrap().as_slice()).unwrap();
+        let content_id = lr.content_id.unwrap();
+        match content_id.content_id_variant.unwrap() {
+            ContentIdVariant::WidevinePsshData(data) => {
+                assert!(!data.pssh_data.is_empty());
+                assert_eq!(data.pssh_data[0], pssh.init_data());
+            }
+            other => panic!("expected WidevinePsshData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn challenge_without_privacy_has_client_id() {
+        let mut session = Session::new(test_device());
+        let challenge = session
+            .build_license_challenge(&test_pssh(), LicenseType::Streaming)
+            .unwrap();
+
+        let signed = SignedMessage::decode(challenge.as_slice()).unwrap();
+        let lr = LicenseRequest::decode(signed.msg.unwrap().as_slice()).unwrap();
+        assert!(lr.client_id.is_some());
+        assert!(lr.encrypted_client_id.is_none());
+    }
+
+    #[test]
+    fn challenge_with_privacy_has_encrypted_client_id() {
+        let mut session = Session::new(test_device());
+        // Use hardcoded common cert (bypasses signature verification)
+        session.set_service_certificate_common().unwrap();
+        let challenge = session
+            .build_license_challenge(&test_pssh(), LicenseType::Streaming)
+            .unwrap();
+
+        let signed = SignedMessage::decode(challenge.as_slice()).unwrap();
+        let lr = LicenseRequest::decode(signed.msg.unwrap().as_slice()).unwrap();
+        assert!(lr.client_id.is_none());
+        assert!(lr.encrypted_client_id.is_some());
+
+        let eci = lr.encrypted_client_id.unwrap();
+        assert!(eci.encrypted_client_id.is_some());
+        assert!(eci.encrypted_client_id_iv.is_some());
+        assert!(eci.encrypted_privacy_key.is_some());
+    }
+
+    #[test]
+    fn challenge_license_type_offline() {
+        let mut session = Session::new(test_device());
+        let challenge = session
+            .build_license_challenge(&test_pssh(), LicenseType::Offline)
+            .unwrap();
+
+        let signed = SignedMessage::decode(challenge.as_slice()).unwrap();
+        let lr = LicenseRequest::decode(signed.msg.unwrap().as_slice()).unwrap();
+        let content_id = lr.content_id.unwrap();
+        match content_id.content_id_variant.unwrap() {
+            ContentIdVariant::WidevinePsshData(data) => {
+                assert_eq!(
+                    data.license_type,
+                    Some(wdv3_proto::LicenseType::Offline as i32)
+                );
+            }
+            other => panic!("expected WidevinePsshData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn android_request_id_format() {
+        let device = test_device();
+        assert_eq!(device.device_type, DeviceType::Android);
+        let session = Session::new(device);
+        let rid = generate_request_id(DeviceType::Android, session.number());
+        assert_eq!(rid.len(), 16);
+        // bytes 4..8 should be zero (OEMCrypto CTR counter block format)
+        assert_eq!(&rid[4..8], &[0, 0, 0, 0]);
+        // bytes 8..16 should be the session number in LE
+        let sn = u64::from_le_bytes(rid[8..16].try_into().unwrap());
+        assert_eq!(sn, session.number());
+    }
+
+    #[test]
+    fn chrome_request_id_is_16_random_bytes() {
+        let rid1 = generate_request_id(DeviceType::Chrome, 1);
+        let rid2 = generate_request_id(DeviceType::Chrome, 1);
+        assert_eq!(rid1.len(), 16);
+        assert_eq!(rid2.len(), 16);
+        // Two random request IDs should (almost certainly) differ
+        assert_ne!(rid1, rid2);
+    }
+
+    // ── Service certificate ───────────────────────────────────────────
+
+    #[test]
+    fn set_service_certificate_rejects_invalid() {
+        let mut session = Session::new(test_device());
+        // The test certificate is not signed by the Widevine root key
+        let err = session.set_service_certificate(TEST_CERT).unwrap_err();
+        assert!(matches!(
+            err,
+            CdmError::RsaKeyParse(_) | CdmError::CertificateSignatureMismatch
+        ),);
+    }
+
+    #[test]
+    fn set_service_certificate_rejects_garbage() {
+        let mut session = Session::new(test_device());
+        // Garbage input should fail at some stage of the verification pipeline
+        assert!(session.set_service_certificate(b"garbage").is_err());
+    }
+
+    #[test]
+    fn set_service_certificate_common() {
+        let mut session = Session::new(test_device());
+        session.set_service_certificate_common().unwrap();
+    }
+
+    #[test]
+    fn set_service_certificate_staging() {
+        let mut session = Session::new(test_device());
+        session.set_service_certificate_staging().unwrap();
+    }
+
+    // ── parse_license_response error cases ────────────────────────────
+
+    #[test]
+    fn parse_response_rejects_garbage() {
+        let mut session = Session::new(test_device());
+        let err = session.parse_license_response(b"not-a-protobuf");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn parse_response_rejects_wrong_message_type() {
+        let mut session = Session::new(test_device());
+        // Build a SignedMessage with type=LICENSE_REQUEST instead of LICENSE
+        let msg = SignedMessage {
+            r#type: Some(MessageType::LicenseRequest as i32),
+            msg: Some(vec![1, 2, 3]),
+            signature: Some(vec![4, 5, 6]),
+            ..Default::default()
+        };
+        let bytes = msg.encode_to_vec();
+        let err = session.parse_license_response(&bytes).unwrap_err();
+        assert!(matches!(err, CdmError::ProtobufDecode(_)));
+    }
+}

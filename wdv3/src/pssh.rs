@@ -218,3 +218,137 @@ fn check_bounds(data: &[u8], offset: usize, need: usize, field: &str) -> CdmResu
 fn pssh_err(msg: &str) -> CdmError {
     CdmError::PsshMalformed(msg.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+    use prost::Message;
+
+    const WV_SYSID: [u8; 16] = hex!("edef8ba979d64acea3c827dcd51d21ed");
+
+    /// Build a minimal v0 PSSH box with the given data payload.
+    fn build_v0_pssh(data: &[u8]) -> Vec<u8> {
+        // header(28) + data_size(4) + data
+        let box_size = (32 + data.len()) as u32;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&box_size.to_be_bytes());
+        buf.extend_from_slice(b"pssh");
+        buf.push(0); // version 0
+        buf.extend_from_slice(&[0, 0, 0]); // flags
+        buf.extend_from_slice(&WV_SYSID);
+        buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        buf.extend_from_slice(data);
+        buf
+    }
+
+    /// Build a v1 PSSH box with key IDs and a data payload.
+    fn build_v1_pssh(key_ids: &[[u8; 16]], data: &[u8]) -> Vec<u8> {
+        let box_size = (32 + 4 + key_ids.len() * 16 + data.len()) as u32;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&box_size.to_be_bytes());
+        buf.extend_from_slice(b"pssh");
+        buf.push(1); // version 1
+        buf.extend_from_slice(&[0, 0, 0]); // flags
+        buf.extend_from_slice(&WV_SYSID);
+        buf.extend_from_slice(&(key_ids.len() as u32).to_be_bytes());
+        for kid in key_ids {
+            buf.extend_from_slice(kid);
+        }
+        buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        buf.extend_from_slice(data);
+        buf
+    }
+
+    #[test]
+    fn parse_v0_round_trip() {
+        let data = b"test-pssh-data";
+        let raw = build_v0_pssh(data);
+        let pssh = PsshBox::from_bytes(&raw).unwrap();
+        assert_eq!(pssh.version, 0);
+        assert_eq!(pssh.system_id, WV_SYSID);
+        assert!(pssh.key_ids.is_empty());
+        assert_eq!(pssh.data, data);
+        assert_eq!(pssh.to_bytes(), raw);
+    }
+
+    #[test]
+    fn parse_v1_with_key_ids() {
+        let kid1 = hex!("00000000000000000000000000000001");
+        let kid2 = hex!("00000000000000000000000000000002");
+        let data = b"payload";
+        let raw = build_v1_pssh(&[kid1, kid2], data);
+        let pssh = PsshBox::from_bytes(&raw).unwrap();
+        assert_eq!(pssh.version, 1);
+        assert_eq!(pssh.key_ids.len(), 2);
+        assert_eq!(pssh.key_ids[0], kid1);
+        assert_eq!(pssh.key_ids[1], kid2);
+        assert_eq!(pssh.data, data);
+        // v1 key_ids() returns box header kids
+        let kids = pssh.key_ids().unwrap();
+        assert_eq!(kids, vec![kid1, kid2]);
+    }
+
+    #[test]
+    fn v1_round_trip() {
+        let kid = hex!("aabbccddaabbccddaabbccddaabbccdd");
+        let raw = build_v1_pssh(&[kid], b"");
+        let pssh = PsshBox::from_bytes(&raw).unwrap();
+        assert_eq!(pssh.to_bytes(), raw);
+    }
+
+    #[test]
+    fn base64_round_trip() {
+        let raw = build_v0_pssh(b"hello");
+        let pssh = PsshBox::from_bytes(&raw).unwrap();
+        let b64 = pssh.to_base64();
+        let pssh2 = PsshBox::from_base64(&b64).unwrap();
+        assert_eq!(pssh, pssh2);
+    }
+
+    #[test]
+    fn v0_key_ids_from_protobuf() {
+        // Build a WidevinePsshData protobuf with a key_id
+        let kid = hex!("01020304050607080910111213141516");
+        let pssh_data = wdv3_proto::WidevinePsshData {
+            key_ids: vec![kid.to_vec()],
+            ..Default::default()
+        };
+        let data_bytes = pssh_data.encode_to_vec();
+        let raw = build_v0_pssh(&data_bytes);
+        let pssh = PsshBox::from_bytes(&raw).unwrap();
+        let kids = pssh.key_ids().unwrap();
+        assert_eq!(kids, vec![kid]);
+    }
+
+    #[test]
+    fn wrong_system_id() {
+        let mut raw = build_v0_pssh(b"data");
+        // Corrupt system ID
+        raw[12] = 0xFF;
+        let err = PsshBox::from_bytes(&raw).unwrap_err();
+        assert!(matches!(err, CdmError::PsshSystemIdMismatch));
+    }
+
+    #[test]
+    fn not_pssh_box_type() {
+        let mut raw = build_v0_pssh(b"data");
+        raw[4..8].copy_from_slice(b"moof");
+        let err = PsshBox::from_bytes(&raw).unwrap_err();
+        assert!(matches!(err, CdmError::PsshMalformed(_)));
+    }
+
+    #[test]
+    fn truncated_input() {
+        let err = PsshBox::from_bytes(&[0u8; 10]).unwrap_err();
+        assert!(matches!(err, CdmError::PsshMalformed(_)));
+    }
+
+    #[test]
+    fn unsupported_version() {
+        let mut raw = build_v0_pssh(b"data");
+        raw[8] = 2; // version 2 not supported
+        let err = PsshBox::from_bytes(&raw).unwrap_err();
+        assert!(matches!(err, CdmError::PsshMalformed(_)));
+    }
+}
