@@ -65,6 +65,19 @@ pub enum KeyType {
     OemContent = 6,
 }
 
+impl std::fmt::Display for KeyType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Signing => write!(f, "SIGNING"),
+            Self::Content => write!(f, "CONTENT"),
+            Self::KeyControl => write!(f, "KEY_CONTROL"),
+            Self::OperatorSession => write!(f, "OPERATOR_SESSION"),
+            Self::Entitlement => write!(f, "ENTITLEMENT"),
+            Self::OemContent => write!(f, "OEM_CONTENT"),
+        }
+    }
+}
+
 impl KeyType {
     pub const fn from_u8(u: u8) -> Option<Self> {
         match u {
@@ -148,7 +161,10 @@ impl From<ProtoLicenseType> for LicenseType {
 }
 
 /// A content decryption key extracted from a license response.
-#[derive(Debug, Clone)]
+///
+/// `Display` prints `kid_hex:key_hex` (e.g. `00000000000000000000000000000001:abcdef0123456789`).
+/// `Debug` prints `[CONTENT] kid_hex:key_hex` (prefixed with the key type).
+#[derive(Clone)]
 pub struct ContentKey {
     /// Key ID: 16 bytes, from KeyContainer.id (proto field 1),
     /// normalized via kid_to_uuid conversion (see parse_license_response step 8c).
@@ -159,20 +175,50 @@ pub struct ContentKey {
     /// protocol does not constrain key length — Vec<u8> is used intentionally.
     pub key: Vec<u8>,
     /// Key type from KeyContainer.type (proto field 4).
-    /// All types are decrypted and stored; format_keys() filters to CONTENT (2) for output.
+    /// All types are decrypted and stored; consumers typically filter to CONTENT for output.
     pub key_type: KeyType,
 }
 
+impl ContentKey {
+    /// Key ID as a lowercase hex string.
+    pub fn kid_hex(&self) -> String {
+        hex::encode(self.kid)
+    }
+
+    /// Decrypted key as a lowercase hex string.
+    pub fn key_hex(&self) -> String {
+        hex::encode(&self.key)
+    }
+}
+
+impl std::fmt::Display for ContentKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", hex::encode(self.kid), hex::encode(&self.key))
+    }
+}
+
+impl std::fmt::Debug for ContentKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}] {}:{}",
+            self.key_type,
+            hex::encode(self.kid),
+            hex::encode(&self.key),
+        )
+    }
+}
+
 /// The three derived keys from a session key.
-pub struct DerivedKeys {
+pub(crate) struct DerivedKeys {
     /// 16 bytes. AES-CMAC(session_key, 0x01 || enc_context).
     /// Used to decrypt KeyContainer.key fields.
-    pub enc_key: [u8; 16],
+    pub(crate) enc_key: [u8; 16],
     /// 32 bytes. CMAC(session_key, 0x01 || mac_context) || CMAC(session_key, 0x02 || mac_context).
     /// Used to verify license response signature via HMAC-SHA256.
-    pub mac_key_server: [u8; 32],
+    pub(crate) mac_key_server: [u8; 32],
     /// 32 bytes. CMAC(session_key, 0x03 || mac_context) || CMAC(session_key, 0x04 || mac_context).
     /// Used for license renewal requests.
     #[allow(dead_code)]
-    pub mac_key_client: [u8; 32],
+    pub(crate) mac_key_client: [u8; 32],
 }

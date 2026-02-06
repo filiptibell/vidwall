@@ -305,18 +305,27 @@ impl Session {
         Ok(&self.content_keys)
     }
 
-    /// Returns the extracted content keys (empty until `parse_license_response` succeeds).
+    /// Returns all extracted keys (empty until `parse_license_response` succeeds).
     pub fn keys(&self) -> &[ContentKey] {
         &self.content_keys
     }
 
-    /// Returns content keys filtered to `KeyType::Content`, formatted as `(hex_kid, hex_key)` pairs.
-    pub fn content_keys_as_hex(&self) -> Vec<(String, String)> {
+    /// Returns only content keys (`KeyType::Content`).
+    pub fn content_keys(&self) -> Vec<&ContentKey> {
+        self.keys_of_type(KeyType::Content)
+    }
+
+    /// Returns keys matching the given type.
+    pub fn keys_of_type(&self, key_type: KeyType) -> Vec<&ContentKey> {
         self.content_keys
             .iter()
-            .filter(|k| k.key_type == KeyType::Content)
-            .map(|k| (hex::encode(k.kid), hex::encode(&k.key)))
+            .filter(|k| k.key_type == key_type)
             .collect()
+    }
+
+    /// Look up a key by its 16-byte key ID. Returns the first match regardless of type.
+    pub fn key_by_kid(&self, kid: &[u8; 16]) -> Option<&ContentKey> {
+        self.content_keys.iter().find(|k| &k.kid == kid)
     }
 }
 
