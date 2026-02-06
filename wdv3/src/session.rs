@@ -250,7 +250,7 @@ impl Session {
         })?;
 
         // Step 6: Derive encryption and MAC keys
-        let derived = aes::derive_keys(&enc_context, &mac_context, &session_key)?;
+        let derived = aes::derive_keys(&enc_context, &mac_context, &session_key);
 
         // Step 7: Verify the license response HMAC signature
         hmac::verify_license_signature(

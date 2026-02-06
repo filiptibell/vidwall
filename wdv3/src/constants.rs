@@ -1,10 +1,12 @@
 use hex_literal::hex;
 
-/// Widevine DRM System ID: `edef8ba979d6-4acea3-c827dcd51d21ed`
+/// Widevine DRM System ID: `edef8ba9-79d6-4ace-a3c8-27dcd51d21ed`
 pub const WIDEVINE_SYSTEM_ID: [u8; 16] = hex!(
-    "edef8ba979d6"
-    "4acea3"
-    "c827dcd51d21ed"
+    "edef8ba9"
+    "79d6"
+    "4ace"
+    "a3c8"
+    "27dcd51d21ed"
 );
 
 /// The Widevine root DrmCertificate, used to verify service certificate signatures.

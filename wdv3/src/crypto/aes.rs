@@ -21,11 +21,7 @@ use crate::types::DerivedKeys;
 ///                   || CMAC(session_key, [0x02] || mac_context)                   -> 32 bytes
 ///   mac_key_client  = CMAC(session_key, [0x03] || mac_context)
 ///                   || CMAC(session_key, [0x04] || mac_context)                   -> 32 bytes
-pub fn derive_keys(
-    enc_context: &[u8],
-    mac_context: &[u8],
-    session_key: &[u8; 16],
-) -> Result<DerivedKeys, CdmError> {
+pub fn derive_keys(enc_context: &[u8], mac_context: &[u8], session_key: &[u8; 16]) -> DerivedKeys {
     let enc_key = aes_cmac(session_key, &prefixed(0x01, enc_context));
 
     let mut mac_key_server = [0u8; 32];
@@ -36,11 +32,11 @@ pub fn derive_keys(
     mac_key_client[..16].copy_from_slice(&aes_cmac(session_key, &prefixed(0x03, mac_context)));
     mac_key_client[16..].copy_from_slice(&aes_cmac(session_key, &prefixed(0x04, mac_context)));
 
-    Ok(DerivedKeys {
+    DerivedKeys {
         enc_key,
         mac_key_server,
         mac_key_client,
-    })
+    }
 }
 
 /// Build the encryption derivation context from serialized LicenseRequest bytes.
@@ -232,7 +228,7 @@ mod tests {
         let session_key = [0x01u8; 16];
         let enc_ctx = build_enc_context(b"test-request");
         let mac_ctx = build_mac_context(b"test-request");
-        let dk = derive_keys(&enc_ctx, &mac_ctx, &session_key).unwrap();
+        let dk = derive_keys(&enc_ctx, &mac_ctx, &session_key);
         // All three derived keys should be different
         assert_ne!(dk.enc_key.as_slice(), &dk.mac_key_server[..16]);
         assert_ne!(dk.mac_key_server, dk.mac_key_client);
