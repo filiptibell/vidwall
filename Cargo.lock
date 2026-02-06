@@ -7587,6 +7587,7 @@ dependencies = [
  "hex",
  "hex-literal",
  "hmac",
+ "include_dir",
  "prost",
  "rand 0.9.2",
  "rsa",

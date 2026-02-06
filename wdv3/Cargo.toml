@@ -4,6 +4,9 @@ version = { workspace = true }
 edition = { workspace = true }
 publish = { workspace = true }
 
+[features]
+static-devices = ["dep:include_dir"]
+
 [dependencies]
 aes = "0.8"
 cmac = "0.7"
@@ -21,3 +24,5 @@ data-encoding = "2"
 hex = "0.4"
 hex-literal = "1.1"
 thiserror = "2"
+
+include_dir = { version = "0.7", optional = true }

@@ -9,6 +9,9 @@ mod session;
 mod types;
 mod utils;
 
+#[cfg(feature = "static-devices")]
+pub mod static_devices;
+
 pub use self::constants::{
     CLEARKEY_SYSTEM_ID, FAIRPLAY_SYSTEM_ID, PLAYREADY_SYSTEM_ID, WIDEVINE_SYSTEM_ID,
 };
