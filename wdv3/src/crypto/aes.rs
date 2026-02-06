@@ -126,7 +126,7 @@ pub fn aes_cbc_decrypt_key(
 ///
 /// Used only by crypto::privacy::encrypt_client_id().
 pub fn aes_cbc_encrypt(key: &[u8; 16], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
-    debug_assert!(
+    assert!(
         !plaintext.is_empty() && plaintext.len().is_multiple_of(16),
         "plaintext must be pre-padded to AES block size"
     );

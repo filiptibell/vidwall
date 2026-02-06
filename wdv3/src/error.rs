@@ -18,6 +18,8 @@ pub enum CdmError {
     WvdBadDeviceType(u8),
     #[error("invalid WVD security level {0}")]
     WvdBadSecurityLevel(u8),
+    #[error("WVD field too large to serialize ({0} bytes, max 65535)")]
+    WvdFieldTooLarge(usize),
 
     // ── PSSH box parsing ──────────────────────────────────────────────
     #[error("malformed PSSH box: {0}")]
@@ -52,12 +54,8 @@ pub enum CdmError {
     CertificateSignatureMismatch,
 
     // ── License exchange ──────────────────────────────────────────────
-    #[error("PSSH box not found in init data")]
-    PsshNotFound,
     #[error("no content keys in license response")]
     NoContentKeys,
-    #[error("license server returned HTTP {0}")]
-    LicenseServerError(u16),
     #[error("no session context for request_id")]
     ContextNotFound,
 }
@@ -66,7 +64,7 @@ pub enum CdmError {
 pub type CdmResult<T> = std::result::Result<T, CdmError>;
 
 /// Error returned by `FromStr` implementations on enum types.
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("unknown {kind} '{value}'")]
 pub struct ParseError {
     pub kind: &'static str,

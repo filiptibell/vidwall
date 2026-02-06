@@ -175,7 +175,7 @@ impl KeyType {
         }
     }
 
-    pub const fn to_name(&self) -> &'static str {
+    pub const fn to_name(self) -> &'static str {
         match self {
             Self::Signing => "SIGNING",
             Self::Content => "CONTENT",
@@ -258,7 +258,7 @@ impl LicenseType {
         }
     }
 
-    pub const fn to_name(&self) -> &'static str {
+    pub const fn to_name(self) -> &'static str {
         match self {
             Self::Streaming => "streaming",
             Self::Offline => "offline",
@@ -310,7 +310,7 @@ impl From<ProtoLicenseType> for LicenseType {
 ///
 /// `Display` prints `kid_hex:key_hex` (e.g. `00000000000000000000000000000001:abcdef0123456789`).
 /// `Debug` prints `[CONTENT] kid_hex:key_hex` (prefixed with the key type).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ContentKey {
     /// Key ID: 16 bytes, from KeyContainer.id (proto field 1),
     /// normalized via kid_to_uuid conversion (see parse_license_response step 8c).

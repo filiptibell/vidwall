@@ -17,12 +17,22 @@ pub struct Device {
     /// Security level as encoded in WVD file byte offset 5.
     pub security_level: SecurityLevel,
     /// Parsed RSA private key (PKCS#1), validated at load time.
-    pub private_key: RsaPrivateKey,
+    pub(crate) private_key: RsaPrivateKey,
     /// Parsed ClientIdentification protobuf, validated at load time.
-    pub client_id: ClientIdentification,
+    pub(crate) client_id: ClientIdentification,
 }
 
 impl Device {
+    /// Returns the parsed RSA private key.
+    pub fn private_key(&self) -> &RsaPrivateKey {
+        &self.private_key
+    }
+
+    /// Returns the parsed client identification metadata.
+    pub fn client_id(&self) -> &ClientIdentification {
+        &self.client_id
+    }
+
     /// Parse a base64-encoded WVD v2 file.
     pub fn from_base64(wvd: impl AsRef<[u8]>) -> CdmResult<Self> {
         let bytes = data_encoding::BASE64
@@ -124,12 +134,18 @@ impl Device {
         buffer.push(0x00);
 
         // Private key
-        let private_key_len = private_key_bytes.len() as u16;
+        let private_key_len: u16 = private_key_bytes
+            .len()
+            .try_into()
+            .map_err(|_| CdmError::WvdFieldTooLarge(private_key_bytes.len()))?;
         buffer.extend(&private_key_len.to_be_bytes());
         buffer.extend(private_key_bytes);
 
         // Client ID
-        let client_id_len = client_id_bytes.len() as u16;
+        let client_id_len: u16 = client_id_bytes
+            .len()
+            .try_into()
+            .map_err(|_| CdmError::WvdFieldTooLarge(client_id_bytes.len()))?;
         buffer.extend(&client_id_len.to_be_bytes());
         buffer.extend(&client_id_bytes);
 

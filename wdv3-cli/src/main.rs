@@ -87,7 +87,7 @@ fn cmd_device(path: &PathBuf) -> Result<()> {
     println!("Device Type:     {}", device.device_type);
     println!("Security Level:  {}", device.security_level);
 
-    let client_id = &device.client_id;
+    let client_id = device.client_id();
 
     if !client_id.client_info.is_empty() {
         println!();
