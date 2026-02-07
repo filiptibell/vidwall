@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use drm_core::ReadError;
+
 #[derive(Debug, Error)]
 pub enum FormatError {
     #[error("invalid magic: expected {expected}, got {got}")]
@@ -12,7 +14,7 @@ pub enum FormatError {
     UnsupportedVersion(u8),
 
     #[error("invalid enum value {value} for {kind}")]
-    InvalidEnumValue { kind: &'static str, value: u16 },
+    InvalidEnumValue { kind: &'static str, value: u32 },
 
     #[error("malformed structure: {0}")]
     Malformed(String),
@@ -22,4 +24,13 @@ pub enum FormatError {
 
     #[error("invalid XML: {0}")]
     InvalidXml(String),
+}
+
+impl From<ReadError> for FormatError {
+    fn from(e: ReadError) -> Self {
+        Self::UnexpectedEof {
+            needed: e.needed,
+            have: e.have,
+        }
+    }
 }

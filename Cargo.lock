@@ -1828,6 +1828,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "drm-core",
+ "drm-playready",
  "drm-widevine",
  "hex",
  "reqwest 0.13.1",

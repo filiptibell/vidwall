@@ -15,7 +15,7 @@ pub struct InspectPsshCommand {
 impl InspectPsshCommand {
     pub fn run(self) -> Result<()> {
         let pssh =
-            drm_widevine::PsshBox::from_base64(&self.base64).context("failed to parse PSSH box")?;
+            drm_core::PsshBox::from_base64(&self.base64).context("failed to parse PSSH box")?;
 
         println!("Version:    {}", pssh.version);
         println!("System ID:  {}", hex::encode(pssh.system_id));

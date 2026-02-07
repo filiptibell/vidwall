@@ -90,7 +90,7 @@ impl GetKeysCommand {
 
         // Parse PSSH and build challenge
         let pssh =
-            drm_widevine::PsshBox::from_base64(&self.pssh).context("failed to parse PSSH box")?;
+            drm_core::PsshBox::from_base64(&self.pssh).context("failed to parse PSSH box")?;
 
         let challenge = session
             .build_license_challenge(&pssh, self.license_type)

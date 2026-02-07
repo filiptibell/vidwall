@@ -1,9 +1,10 @@
 use core::fmt;
 use core::str::FromStr;
 
-use drm_core::ParseError;
-
-use crate::utils::{eq_ignore_ascii_case, trim_ascii};
+use drm_core::{
+    ParseError,
+    utils::{eq_ignore_ascii_case, trim_ascii},
+};
 
 /**
     Device type as encoded in WVD file byte offset 4.

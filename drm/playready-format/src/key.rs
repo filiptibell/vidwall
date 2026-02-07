@@ -1,12 +1,13 @@
 use core::fmt;
+use core::str::FromStr;
 
-use crate::error::FormatError;
+use drm_core::{ParseError, eq_ignore_ascii_case, trim_ascii};
 
 /**
     Content encryption algorithm used by a PlayReady content key.
 */
 #[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KeyType {
     Invalid = 0x0000,
     Aes128Ctr = 0x0001,
@@ -18,7 +19,38 @@ pub enum KeyType {
 }
 
 impl KeyType {
-    pub const fn name(self) -> &'static str {
+    pub const fn from_u16(u: u16) -> Option<Self> {
+        match u {
+            0x0000 => Some(Self::Invalid),
+            0x0001 => Some(Self::Aes128Ctr),
+            0x0002 => Some(Self::Rc4Cipher),
+            0x0003 => Some(Self::Aes128Ecb),
+            0x0004 => Some(Self::Cocktail),
+            0x0005 => Some(Self::Aes128Cbc),
+            0x0006 => Some(Self::KeyExchange),
+            _ => None,
+        }
+    }
+
+    pub const fn to_u16(self) -> u16 {
+        self as u16
+    }
+
+    pub const fn from_name(name: &[u8]) -> Option<Self> {
+        let name = trim_ascii(name);
+        match name.len() {
+            7 if eq_ignore_ascii_case(name, b"INVALID") => Some(Self::Invalid),
+            11 if eq_ignore_ascii_case(name, b"AES_128_CTR") => Some(Self::Aes128Ctr),
+            10 if eq_ignore_ascii_case(name, b"RC4_CIPHER") => Some(Self::Rc4Cipher),
+            11 if eq_ignore_ascii_case(name, b"AES_128_ECB") => Some(Self::Aes128Ecb),
+            8 if eq_ignore_ascii_case(name, b"COCKTAIL") => Some(Self::Cocktail),
+            11 if eq_ignore_ascii_case(name, b"AES_128_CBC") => Some(Self::Aes128Cbc),
+            12 if eq_ignore_ascii_case(name, b"KEY_EXCHANGE") => Some(Self::KeyExchange),
+            _ => None,
+        }
+    }
+
+    pub const fn to_name(self) -> &'static str {
         match self {
             Self::Invalid => "INVALID",
             Self::Aes128Ctr => "AES_128_CTR",
@@ -31,29 +63,20 @@ impl KeyType {
     }
 }
 
-impl TryFrom<u16> for KeyType {
-    type Error = FormatError;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            0x0000 => Ok(Self::Invalid),
-            0x0001 => Ok(Self::Aes128Ctr),
-            0x0002 => Ok(Self::Rc4Cipher),
-            0x0003 => Ok(Self::Aes128Ecb),
-            0x0004 => Ok(Self::Cocktail),
-            0x0005 => Ok(Self::Aes128Cbc),
-            0x0006 => Ok(Self::KeyExchange),
-            _ => Err(FormatError::InvalidEnumValue {
-                kind: "KeyType",
-                value,
-            }),
-        }
+impl fmt::Display for KeyType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.to_name())
     }
 }
 
-impl fmt::Display for KeyType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+impl FromStr for KeyType {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s.as_bytes()).ok_or_else(|| ParseError {
+            kind: "key type",
+            value: s.to_owned(),
+        })
     }
 }
 
@@ -61,7 +84,7 @@ impl fmt::Display for KeyType {
     Key wrapping cipher used to encrypt content keys in XMR licenses.
 */
 #[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CipherType {
     Invalid = 0x0000,
     Rsa1024 = 0x0001,
@@ -73,7 +96,40 @@ pub enum CipherType {
 }
 
 impl CipherType {
-    pub const fn name(self) -> &'static str {
+    pub const fn from_u16(u: u16) -> Option<Self> {
+        match u {
+            0x0000 => Some(Self::Invalid),
+            0x0001 => Some(Self::Rsa1024),
+            0x0002 => Some(Self::ChainedLicense),
+            0x0003 => Some(Self::Ecc256),
+            0x0004 => Some(Self::Ecc256WithKz),
+            0x0005 => Some(Self::TeeTransient),
+            0x0006 => Some(Self::Ecc256ViaSymmetric),
+            _ => None,
+        }
+    }
+
+    pub const fn to_u16(self) -> u16 {
+        self as u16
+    }
+
+    pub const fn from_name(name: &[u8]) -> Option<Self> {
+        let name = trim_ascii(name);
+        match name.len() {
+            7 if eq_ignore_ascii_case(name, b"INVALID") => Some(Self::Invalid),
+            8 if eq_ignore_ascii_case(name, b"RSA_1024") => Some(Self::Rsa1024),
+            15 if eq_ignore_ascii_case(name, b"CHAINED_LICENSE") => Some(Self::ChainedLicense),
+            7 if eq_ignore_ascii_case(name, b"ECC_256") => Some(Self::Ecc256),
+            15 if eq_ignore_ascii_case(name, b"ECC_256_WITH_KZ") => Some(Self::Ecc256WithKz),
+            13 if eq_ignore_ascii_case(name, b"TEE_TRANSIENT") => Some(Self::TeeTransient),
+            21 if eq_ignore_ascii_case(name, b"ECC_256_VIA_SYMMETRIC") => {
+                Some(Self::Ecc256ViaSymmetric)
+            }
+            _ => None,
+        }
+    }
+
+    pub const fn to_name(self) -> &'static str {
         match self {
             Self::Invalid => "INVALID",
             Self::Rsa1024 => "RSA_1024",
@@ -86,29 +142,20 @@ impl CipherType {
     }
 }
 
-impl TryFrom<u16> for CipherType {
-    type Error = FormatError;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            0x0000 => Ok(Self::Invalid),
-            0x0001 => Ok(Self::Rsa1024),
-            0x0002 => Ok(Self::ChainedLicense),
-            0x0003 => Ok(Self::Ecc256),
-            0x0004 => Ok(Self::Ecc256WithKz),
-            0x0005 => Ok(Self::TeeTransient),
-            0x0006 => Ok(Self::Ecc256ViaSymmetric),
-            _ => Err(FormatError::InvalidEnumValue {
-                kind: "CipherType",
-                value,
-            }),
-        }
+impl fmt::Display for CipherType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.to_name())
     }
 }
 
-impl fmt::Display for CipherType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+impl FromStr for CipherType {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s.as_bytes()).ok_or_else(|| ParseError {
+            kind: "cipher type",
+            value: s.to_owned(),
+        })
     }
 }
 
@@ -128,15 +175,15 @@ mod tests {
             KeyType::KeyExchange,
         ];
         for kt in variants {
-            let v = kt as u16;
-            assert_eq!(KeyType::try_from(v).unwrap(), kt);
+            let v = kt.to_u16();
+            assert_eq!(KeyType::from_u16(v), Some(kt));
         }
     }
 
     #[test]
     fn key_type_invalid_value() {
-        assert!(KeyType::try_from(0x0007).is_err());
-        assert!(KeyType::try_from(0xFFFF).is_err());
+        assert!(KeyType::from_u16(0x0007).is_none());
+        assert!(KeyType::from_u16(0xFFFF).is_none());
     }
 
     #[test]
@@ -151,15 +198,67 @@ mod tests {
             CipherType::Ecc256ViaSymmetric,
         ];
         for ct in variants {
-            let v = ct as u16;
-            assert_eq!(CipherType::try_from(v).unwrap(), ct);
+            let v = ct.to_u16();
+            assert_eq!(CipherType::from_u16(v), Some(ct));
         }
     }
 
     #[test]
     fn cipher_type_invalid_value() {
-        assert!(CipherType::try_from(0x0007).is_err());
-        assert!(CipherType::try_from(0xFFFF).is_err());
+        assert!(CipherType::from_u16(0x0007).is_none());
+        assert!(CipherType::from_u16(0xFFFF).is_none());
+    }
+
+    #[test]
+    fn key_type_name_round_trip() {
+        for kt in [
+            KeyType::Invalid,
+            KeyType::Aes128Ctr,
+            KeyType::Rc4Cipher,
+            KeyType::Aes128Ecb,
+            KeyType::Cocktail,
+            KeyType::Aes128Cbc,
+            KeyType::KeyExchange,
+        ] {
+            let name = kt.to_name();
+            let parsed: KeyType = name.parse().unwrap();
+            assert_eq!(parsed, kt);
+        }
+    }
+
+    #[test]
+    fn key_type_from_name_case_insensitive() {
+        assert_eq!(KeyType::from_name(b"aes_128_ctr"), Some(KeyType::Aes128Ctr));
+        assert_eq!(KeyType::from_name(b"AES_128_CTR"), Some(KeyType::Aes128Ctr));
+        assert_eq!(KeyType::from_name(b"Cocktail"), Some(KeyType::Cocktail));
+        assert_eq!(KeyType::from_name(b"unknown"), None);
+    }
+
+    #[test]
+    fn cipher_type_name_round_trip() {
+        for ct in [
+            CipherType::Invalid,
+            CipherType::Rsa1024,
+            CipherType::ChainedLicense,
+            CipherType::Ecc256,
+            CipherType::Ecc256WithKz,
+            CipherType::TeeTransient,
+            CipherType::Ecc256ViaSymmetric,
+        ] {
+            let name = ct.to_name();
+            let parsed: CipherType = name.parse().unwrap();
+            assert_eq!(parsed, ct);
+        }
+    }
+
+    #[test]
+    fn cipher_type_from_name_case_insensitive() {
+        assert_eq!(CipherType::from_name(b"ecc_256"), Some(CipherType::Ecc256));
+        assert_eq!(
+            CipherType::from_name(b"ECC_256_VIA_SYMMETRIC"),
+            Some(CipherType::Ecc256ViaSymmetric)
+        );
+        assert_eq!(CipherType::from_name(b"unknown"), None);
     }
 
     #[test]
@@ -170,5 +269,11 @@ mod tests {
             CipherType::Ecc256ViaSymmetric.to_string(),
             "ECC_256_VIA_SYMMETRIC"
         );
+    }
+
+    #[test]
+    fn from_str_invalid() {
+        assert!("BAD".parse::<KeyType>().is_err());
+        assert!("BAD".parse::<CipherType>().is_err());
     }
 }

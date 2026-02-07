@@ -18,7 +18,7 @@ pub(crate) const fn bytes_equal(a: &[u8], b: &[u8]) -> bool {
 /**
     Const-compatible ASCII whitespace trimming (both ends).
 */
-pub(crate) const fn trim_ascii(s: &[u8]) -> &[u8] {
+pub const fn trim_ascii(s: &[u8]) -> &[u8] {
     let mut start = 0;
     while start < s.len() && s[start].is_ascii_whitespace() {
         start += 1;
@@ -49,7 +49,7 @@ pub(crate) const fn hex_digit(b: u8) -> Option<u8> {
     Const-compatible case-insensitive ASCII byte comparison.
     Both slices must have the same length (caller must check).
 */
-pub(crate) const fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
+pub const fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

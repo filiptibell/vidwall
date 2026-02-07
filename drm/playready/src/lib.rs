@@ -1,3 +1,7 @@
+#![allow(clippy::doc_overindented_list_items)]
+
+pub use drm_core as core;
+
 mod constants;
 mod crypto;
 mod device;

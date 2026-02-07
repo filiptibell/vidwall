@@ -91,7 +91,7 @@ async fn license_request(license_url: &str, body: Vec<u8>) -> Result<Vec<u8>> {
 pub async fn fetch_decryption_keys(pssh_b64: &str, license_url: &str) -> Result<Vec<String>> {
     println!("[cdrm] Performing local license acquisition...");
 
-    let pssh = drm_widevine::PsshBox::from_base64(pssh_b64)
+    let pssh = drm_widevine::core::PsshBox::from_base64(pssh_b64)
         .map_err(|e| anyhow!("Failed to parse PSSH: {e}"))?;
 
     let device = drm_widevine::static_devices::random();
@@ -117,7 +117,7 @@ pub async fn fetch_decryption_keys(pssh_b64: &str, license_url: &str) -> Result<
 
     let content_keys: Vec<String> = keys
         .iter()
-        .filter(|k| k.key_type == drm_widevine::KeyType::Content)
+        .filter(|k| k.key_type == drm_widevine::core::KeyType::Content)
         .map(|k| format!("{}:{}", k.kid_hex(), k.key_hex()))
         .collect();
 

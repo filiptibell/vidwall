@@ -3,8 +3,11 @@
 */
 
 use core::fmt;
+use core::str::FromStr;
 
-use quick_xml::{Reader, events::Event};
+use quick_xml::events::Event;
+
+use drm_core::{ParseError, Reader, eq_ignore_ascii_case, trim_ascii};
 
 use crate::error::FormatError;
 
@@ -42,41 +45,19 @@ impl PlayReadyHeader {
         Layout (little-endian):
         - length: u32le (total byte length of the header)
         - record_count: u16le
-        - records: [PlayReadyObject; record_count]
+        - records: \[PlayReadyObject; record_count\]
     */
     pub fn from_bytes(data: &[u8]) -> Result<Self, FormatError> {
-        if data.len() < 6 {
-            return Err(FormatError::UnexpectedEof {
-                needed: 6,
-                have: data.len(),
-            });
-        }
+        let mut r = Reader::new(data);
 
-        let _length = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-        let record_count = u16::from_le_bytes([data[4], data[5]]) as usize;
+        let _length = r.read_u32le()?;
+        let record_count = r.read_u16le()? as usize;
 
-        let mut offset = 6;
         let mut records = Vec::with_capacity(record_count);
         for _ in 0..record_count {
-            if offset + 4 > data.len() {
-                return Err(FormatError::UnexpectedEof {
-                    needed: offset + 4,
-                    have: data.len(),
-                });
-            }
-            let record_type = u16::from_le_bytes([data[offset], data[offset + 1]]);
-            let record_len = u16::from_le_bytes([data[offset + 2], data[offset + 3]]) as usize;
-            offset += 4;
-
-            if offset + record_len > data.len() {
-                return Err(FormatError::UnexpectedEof {
-                    needed: offset + record_len,
-                    have: data.len(),
-                });
-            }
-            let record_data = data[offset..offset + record_len].to_vec();
-            offset += record_len;
-
+            let record_type = r.read_u16le()?;
+            let record_len = r.read_u16le()? as usize;
+            let record_data = r.read_bytes(record_len)?.to_vec();
             records.push(PlayReadyObject {
                 record_type,
                 data: record_data,
@@ -139,7 +120,7 @@ pub struct WrmHeader {
 /**
     WRM Header version.
 */
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WrmHeaderVersion {
     V4_0_0_0,
     V4_1_0_0,
@@ -147,21 +128,19 @@ pub enum WrmHeaderVersion {
     V4_3_0_0,
 }
 
-impl std::str::FromStr for WrmHeaderVersion {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "4.0.0.0" => Ok(Self::V4_0_0_0),
-            "4.1.0.0" => Ok(Self::V4_1_0_0),
-            "4.2.0.0" => Ok(Self::V4_2_0_0),
-            "4.3.0.0" => Ok(Self::V4_3_0_0),
-            _ => Err(()),
+impl WrmHeaderVersion {
+    pub const fn from_name(name: &[u8]) -> Option<Self> {
+        let name = trim_ascii(name);
+        match name.len() {
+            7 if eq_ignore_ascii_case(name, b"4.0.0.0") => Some(Self::V4_0_0_0),
+            7 if eq_ignore_ascii_case(name, b"4.1.0.0") => Some(Self::V4_1_0_0),
+            7 if eq_ignore_ascii_case(name, b"4.2.0.0") => Some(Self::V4_2_0_0),
+            7 if eq_ignore_ascii_case(name, b"4.3.0.0") => Some(Self::V4_3_0_0),
+            _ => None,
         }
     }
-}
 
-impl WrmHeaderVersion {
-    pub const fn as_str(self) -> &'static str {
+    pub const fn to_name(self) -> &'static str {
         match self {
             Self::V4_0_0_0 => "4.0.0.0",
             Self::V4_1_0_0 => "4.1.0.0",
@@ -173,7 +152,18 @@ impl WrmHeaderVersion {
 
 impl fmt::Display for WrmHeaderVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.to_name())
+    }
+}
+
+impl FromStr for WrmHeaderVersion {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s.as_bytes()).ok_or_else(|| ParseError {
+            kind: "WRM header version",
+            value: s.to_owned(),
+        })
     }
 }
 
@@ -194,27 +184,25 @@ pub struct SignedKeyId {
 /**
     Content encryption algorithm identifier from WRM Header XML.
 */
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AlgId {
     AesCtr,
     AesCbc,
     Cocktail,
 }
 
-impl std::str::FromStr for AlgId {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "AESCTR" => Ok(Self::AesCtr),
-            "AESCBC" => Ok(Self::AesCbc),
-            "COCKTAIL" => Ok(Self::Cocktail),
-            _ => Err(()),
+impl AlgId {
+    pub const fn from_name(name: &[u8]) -> Option<Self> {
+        let name = trim_ascii(name);
+        match name.len() {
+            6 if eq_ignore_ascii_case(name, b"AESCTR") => Some(Self::AesCtr),
+            6 if eq_ignore_ascii_case(name, b"AESCBC") => Some(Self::AesCbc),
+            8 if eq_ignore_ascii_case(name, b"COCKTAIL") => Some(Self::Cocktail),
+            _ => None,
         }
     }
-}
 
-impl AlgId {
-    pub const fn as_str(self) -> &'static str {
+    pub const fn to_name(self) -> &'static str {
         match self {
             Self::AesCtr => "AESCTR",
             Self::AesCbc => "AESCBC",
@@ -225,9 +213,24 @@ impl AlgId {
 
 impl fmt::Display for AlgId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.to_name())
     }
 }
+
+impl FromStr for AlgId {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s.as_bytes()).ok_or_else(|| ParseError {
+            kind: "algorithm ID",
+            value: s.to_owned(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GUID byte-swap helpers
+// ---------------------------------------------------------------------------
 
 /**
     Convert a PlayReady KID (GUID mixed-endian / bytes_le) to standard big-endian UUID bytes.
@@ -279,6 +282,62 @@ fn decode_kid_base64(b64: &str) -> Result<[u8; 16], FormatError> {
     Ok(kid_to_uuid(&kid))
 }
 
+/**
+    Decode a base64 checksum string.
+*/
+fn decode_checksum_base64(s: &str) -> Result<Vec<u8>, FormatError> {
+    use data_encoding::BASE64;
+    BASE64
+        .decode(s.as_bytes())
+        .map_err(|e| FormatError::Malformed(format!("invalid base64 checksum: {e}")))
+}
+
+/**
+    Extract KID attributes from a `<KID>` element (v4.1+).
+
+    Looks for `VALUE`, `ALGID`, and `CHECKSUM` attributes and returns
+    a `SignedKeyId` if `VALUE` is present.
+*/
+fn parse_kid_element<'a>(
+    attrs: impl Iterator<Item = quick_xml::events::attributes::Attribute<'a>>,
+) -> Result<Option<SignedKeyId>, FormatError> {
+    let mut kid_value = None;
+    let mut kid_alg = None;
+    let mut kid_checksum = None;
+
+    for attr in attrs {
+        match attr.key.as_ref() {
+            b"VALUE" => {
+                kid_value = Some(String::from_utf8_lossy(&attr.value).into_owned());
+            }
+            b"ALGID" => {
+                kid_alg = Some(String::from_utf8_lossy(&attr.value).into_owned());
+            }
+            b"CHECKSUM" => {
+                kid_checksum = Some(String::from_utf8_lossy(&attr.value).into_owned());
+            }
+            _ => {}
+        }
+    }
+
+    let Some(b64) = kid_value else {
+        return Ok(None);
+    };
+
+    let key_id = decode_kid_base64(&b64)?;
+    let alg_id = kid_alg.as_deref().and_then(|s| s.parse().ok());
+    let checksum = kid_checksum
+        .as_deref()
+        .map(decode_checksum_base64)
+        .transpose()?;
+
+    Ok(Some(SignedKeyId {
+        key_id,
+        alg_id,
+        checksum,
+    }))
+}
+
 impl WrmHeader {
     /**
         Parse a WRM Header from XML string.
@@ -286,7 +345,7 @@ impl WrmHeader {
         Supports versions 4.0 through 4.3.
     */
     pub fn from_xml(xml: &str) -> Result<Self, FormatError> {
-        let mut reader = Reader::from_str(xml);
+        let mut reader = quick_xml::Reader::from_str(xml);
 
         let mut version = None;
         let mut kids = Vec::new();
@@ -317,50 +376,11 @@ impl WrmHeader {
                     }
 
                     // v4.1+: KID as element with attributes
-                    if name == "KID" && path_contains(&path, "PROTECTINFO") {
-                        let mut kid_value = None;
-                        let mut kid_alg = None;
-                        let mut kid_checksum = None;
-
-                        for attr in e.attributes().flatten() {
-                            match attr.key.as_ref() {
-                                b"VALUE" => {
-                                    kid_value =
-                                        Some(String::from_utf8_lossy(&attr.value).into_owned());
-                                }
-                                b"ALGID" => {
-                                    kid_alg =
-                                        Some(String::from_utf8_lossy(&attr.value).into_owned());
-                                }
-                                b"CHECKSUM" => {
-                                    kid_checksum =
-                                        Some(String::from_utf8_lossy(&attr.value).into_owned());
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        if let Some(b64) = kid_value {
-                            let key_id = decode_kid_base64(&b64)?;
-                            let alg_id = kid_alg.as_deref().and_then(|s| s.parse().ok());
-                            let checksum = kid_checksum
-                                .as_deref()
-                                .map(|s| {
-                                    use data_encoding::BASE64;
-                                    BASE64.decode(s.as_bytes()).map_err(|e| {
-                                        FormatError::Malformed(format!(
-                                            "invalid base64 checksum: {e}"
-                                        ))
-                                    })
-                                })
-                                .transpose()?;
-
-                            kids.push(SignedKeyId {
-                                key_id,
-                                alg_id,
-                                checksum,
-                            });
-                        }
+                    if name == "KID"
+                        && path_contains(&path, "PROTECTINFO")
+                        && let Some(kid) = parse_kid_element(e.attributes().flatten())?
+                    {
+                        kids.push(kid);
                     }
 
                     path.push(name);
@@ -380,15 +400,9 @@ impl WrmHeader {
                             "ALGID" => {
                                 v40_algid_text = Some(text);
                             }
-                            "LA_URL" => {
-                                la_url = Some(text);
-                            }
-                            "LUI_URL" => {
-                                lui_url = Some(text);
-                            }
-                            "DS_ID" => {
-                                ds_id = Some(text);
-                            }
+                            "LA_URL" => la_url = Some(text),
+                            "LUI_URL" => lui_url = Some(text),
+                            "DS_ID" => ds_id = Some(text),
                             _ => {}
                         }
                     }
@@ -397,56 +411,15 @@ impl WrmHeader {
                     let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
 
                     // v4.1+: <KID VALUE="..." ALGID="..." CHECKSUM="..." />
-                    if name == "KID" && path_contains(&path, "PROTECTINFO") {
-                        let mut kid_value = None;
-                        let mut kid_alg = None;
-                        let mut kid_checksum = None;
-
-                        for attr in e.attributes().flatten() {
-                            match attr.key.as_ref() {
-                                b"VALUE" => {
-                                    kid_value =
-                                        Some(String::from_utf8_lossy(&attr.value).into_owned());
-                                }
-                                b"ALGID" => {
-                                    kid_alg =
-                                        Some(String::from_utf8_lossy(&attr.value).into_owned());
-                                }
-                                b"CHECKSUM" => {
-                                    kid_checksum =
-                                        Some(String::from_utf8_lossy(&attr.value).into_owned());
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        if let Some(b64) = kid_value {
-                            let key_id = decode_kid_base64(&b64)?;
-                            let alg_id = kid_alg.as_deref().and_then(|s| s.parse().ok());
-                            let checksum = kid_checksum
-                                .as_deref()
-                                .map(|s| {
-                                    use data_encoding::BASE64;
-                                    BASE64.decode(s.as_bytes()).map_err(|e| {
-                                        FormatError::Malformed(format!(
-                                            "invalid base64 checksum: {e}"
-                                        ))
-                                    })
-                                })
-                                .transpose()?;
-
-                            kids.push(SignedKeyId {
-                                key_id,
-                                alg_id,
-                                checksum,
-                            });
-                        }
+                    if name == "KID"
+                        && path_contains(&path, "PROTECTINFO")
+                        && let Some(kid) = parse_kid_element(e.attributes().flatten())?
+                    {
+                        kids.push(kid);
                     }
                 }
                 Ok(Event::Eof) => break,
-                Err(e) => {
-                    return Err(FormatError::InvalidXml(e.to_string()));
-                }
+                Err(e) => return Err(FormatError::InvalidXml(e.to_string())),
                 _ => {}
             }
         }
@@ -475,9 +448,6 @@ impl WrmHeader {
     }
 }
 
-/**
-    Check if any element in the path matches the given name.
-*/
 fn path_contains(path: &[String], name: &str) -> bool {
     path.iter().any(|s| s == name)
 }
@@ -488,7 +458,6 @@ mod tests {
 
     #[test]
     fn kid_to_uuid_swap() {
-        // GUID bytes_le: {03020100-0504-0706-0809-0A0B0C0D0E0F}
         let kid: [u8; 16] = [
             0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
             0x0E, 0x0F,
@@ -514,7 +483,6 @@ mod tests {
 
     #[test]
     fn parse_prh_binary() {
-        // Build a minimal PRH with one WRM Header record
         let xml_str = "<WRMHEADER version=\"4.3.0.0\"><DATA></DATA></WRMHEADER>";
         let xml_utf16: Vec<u8> = xml_str
             .encode_utf16()
@@ -525,8 +493,8 @@ mod tests {
         let record_len = xml_utf16.len() as u16;
         let total_len = (6 + 4 + xml_utf16.len()) as u32;
         prh.extend_from_slice(&total_len.to_le_bytes());
-        prh.extend_from_slice(&1u16.to_le_bytes()); // record_count
-        prh.extend_from_slice(&1u16.to_le_bytes()); // record_type (WRM Header)
+        prh.extend_from_slice(&1u16.to_le_bytes());
+        prh.extend_from_slice(&1u16.to_le_bytes());
         prh.extend_from_slice(&record_len.to_le_bytes());
         prh.extend_from_slice(&xml_utf16);
 
@@ -585,9 +553,20 @@ mod tests {
     }
 
     #[test]
+    fn wrm_header_version_from_str() {
+        assert_eq!(
+            "4.0.0.0".parse::<WrmHeaderVersion>().unwrap(),
+            WrmHeaderVersion::V4_0_0_0
+        );
+        assert!("5.0.0.0".parse::<WrmHeaderVersion>().is_err());
+    }
+
+    #[test]
     fn alg_id_round_trip() {
         for alg in [AlgId::AesCtr, AlgId::AesCbc, AlgId::Cocktail] {
-            assert_eq!(alg.as_str().parse::<AlgId>(), Ok(alg));
+            let name = alg.to_name();
+            let parsed: AlgId = name.parse().unwrap();
+            assert_eq!(parsed, alg);
         }
         assert!("UNKNOWN".parse::<AlgId>().is_err());
     }

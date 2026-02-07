@@ -2,6 +2,8 @@
     XMR (eXtensible Media Rights) binary license format parsing.
 */
 
+use drm_core::Reader;
+
 use crate::error::FormatError;
 use crate::key::{CipherType, KeyType};
 
@@ -312,60 +314,6 @@ pub struct DigitalVideoOutputObject {
 }
 
 // ---------------------------------------------------------------------------
-// Binary reader (shared pattern with bcert)
-// ---------------------------------------------------------------------------
-
-struct Reader<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    fn remaining(&self) -> usize {
-        self.data.len().saturating_sub(self.pos)
-    }
-
-    fn ensure(&self, n: usize) -> Result<(), FormatError> {
-        if self.remaining() < n {
-            Err(FormatError::UnexpectedEof {
-                needed: self.pos + n,
-                have: self.data.len(),
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], FormatError> {
-        self.ensure(n)?;
-        let slice = &self.data[self.pos..self.pos + n];
-        self.pos += n;
-        Ok(slice)
-    }
-
-    fn read_u16be(&mut self) -> Result<u16, FormatError> {
-        let b = self.read_bytes(2)?;
-        Ok(u16::from_be_bytes([b[0], b[1]]))
-    }
-
-    fn read_u32be(&mut self) -> Result<u32, FormatError> {
-        let b = self.read_bytes(4)?;
-        Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
-    }
-
-    fn read_array<const N: usize>(&mut self) -> Result<[u8; N], FormatError> {
-        let b = self.read_bytes(N)?;
-        let mut arr = [0u8; N];
-        arr.copy_from_slice(b);
-        Ok(arr)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
 
@@ -549,8 +497,18 @@ fn parse_leaf(obj_type: u16, data: &[u8]) -> Result<XmrObjectData, FormatError> 
     match obj_type {
         object_type::CONTENT_KEY => {
             let key_id = r.read_array::<16>()?;
-            let key_type = KeyType::try_from(r.read_u16be()?)?;
-            let cipher_type = CipherType::try_from(r.read_u16be()?)?;
+            let key_type_raw = r.read_u16be()?;
+            let key_type =
+                KeyType::from_u16(key_type_raw).ok_or(FormatError::InvalidEnumValue {
+                    kind: "KeyType",
+                    value: key_type_raw as u32,
+                })?;
+            let cipher_type_raw = r.read_u16be()?;
+            let cipher_type =
+                CipherType::from_u16(cipher_type_raw).ok_or(FormatError::InvalidEnumValue {
+                    kind: "CipherType",
+                    value: cipher_type_raw as u32,
+                })?;
             let key_length = r.read_u16be()? as usize;
             let encrypted_key = r.read_bytes(key_length)?.to_vec();
             Ok(XmrObjectData::ContentKey(ContentKeyObject {
