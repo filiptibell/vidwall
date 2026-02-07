@@ -432,18 +432,21 @@ fn build_hardcoded_service_certificate(
     Generate a random request_id.
 
     - Android devices: mimics OEMCrypto CTR counter block format —
-      4 random bytes + 4 zero bytes + 8-byte little-endian session number.
+      4 random bytes + 4 zero bytes + 8-byte little-endian session number,
+      then hex-encoded to uppercase ASCII (16 raw bytes → 32-byte string).
+      This matches the real Android CDM behavior.
     - Chrome devices: 16 raw random bytes.
 */
 fn generate_request_id(device_type: DeviceType, session_number: u64) -> Vec<u8> {
     let mut rng = rand::rng();
     match device_type {
         DeviceType::Android => {
-            let mut id = vec![0u8; 16];
-            rand::RngCore::fill_bytes(&mut rng, &mut id[..4]);
+            let mut raw = [0u8; 16];
+            rand::RngCore::fill_bytes(&mut rng, &mut raw[..4]);
             // bytes 4..8 stay zero
-            id[8..16].copy_from_slice(&session_number.to_le_bytes());
-            id
+            raw[8..16].copy_from_slice(&session_number.to_le_bytes());
+            // Hex-encode to uppercase ASCII, matching the real CDM output
+            hex_encode_upper(&raw).into_bytes()
         }
         DeviceType::Chrome => {
             let mut id = vec![0u8; 16];
@@ -451,6 +454,19 @@ fn generate_request_id(device_type: DeviceType, session_number: u64) -> Vec<u8> 
             id
         }
     }
+}
+
+/**
+    Encode bytes as an uppercase hex string.
+*/
+fn hex_encode_upper(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /**
@@ -673,11 +689,19 @@ mod tests {
         assert_eq!(device.device_type, DeviceType::Android);
         let session = Session::new(device);
         let rid = generate_request_id(DeviceType::Android, session.number());
-        assert_eq!(rid.len(), 16);
-        // bytes 4..8 should be zero (OEMCrypto CTR counter block format)
-        assert_eq!(&rid[4..8], &[0, 0, 0, 0]);
+        // Android request_id is hex-encoded: 16 raw bytes → 32 uppercase ASCII bytes
+        assert_eq!(rid.len(), 32);
+        let hex_str = std::str::from_utf8(&rid).expect("should be valid ASCII");
+        assert!(hex_str.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(hex_str, hex_str.to_uppercase(), "should be uppercase hex");
+        // Decode back to raw bytes and verify structure
+        let raw: Vec<u8> = (0..16)
+            .map(|i| u8::from_str_radix(&hex_str[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        // bytes 4..8 should be zero
+        assert_eq!(&raw[4..8], &[0, 0, 0, 0]);
         // bytes 8..16 should be the session number in LE
-        let sn = u64::from_le_bytes(rid[8..16].try_into().unwrap());
+        let sn = u64::from_le_bytes(raw[8..16].try_into().unwrap());
         assert_eq!(sn, session.number());
     }
 
