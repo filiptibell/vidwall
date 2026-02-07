@@ -1,6 +1,5 @@
-use drm_widevine_proto::prost::Message;
-
 use drm_core::{PsshBox, PsshError, SystemId};
+use drm_widevine_proto::prost::Message;
 
 use crate::error::{CdmError, CdmResult};
 

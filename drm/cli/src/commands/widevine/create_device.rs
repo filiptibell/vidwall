@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use drm_widevine::proto::Message;
 use rsa::{pkcs1::DecodeRsaPrivateKey, pkcs8::DecodePrivateKey, traits::PublicKeyParts};
+
+use drm_widevine::proto::Message;
 
 /**
     Create a .wvd device file from raw credential files.

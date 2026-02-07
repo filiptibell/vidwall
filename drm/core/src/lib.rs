@@ -12,4 +12,4 @@ pub use self::constants::{
 pub use self::error::{ParseError, PsshError};
 pub use self::pssh::PsshBox;
 pub use self::types::{ContentKey, KeyType, SystemId};
-pub use self::utils::{parse_kid, ParseKid};
+pub use self::utils::{ParseKid, parse_kid};

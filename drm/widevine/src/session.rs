@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ::rsa::{BigUint, pkcs1::EncodeRsaPublicKey};
 use rand::Rng;
+use rsa::{BigUint, pkcs1::EncodeRsaPublicKey};
 
+use drm_core::{ContentKey, KeyType, PsshBox};
 use drm_widevine_proto::{
     DrmCertificate, License, LicenseRequest, SignedDrmCertificate, SignedMessage, prost::Message,
     signed_message::MessageType,
@@ -17,8 +18,6 @@ use crate::constants::{
 };
 use crate::crypto::{aes, hmac, padding, privacy, rsa};
 use crate::device::Device;
-use drm_core::{ContentKey, KeyType, PsshBox};
-
 use crate::error::{CdmError, CdmResult};
 use crate::types::{DeviceType, LicenseType};
 

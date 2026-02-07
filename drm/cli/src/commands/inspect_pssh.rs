@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Args;
+
 use drm_widevine::WidevineExt;
 
 /**
