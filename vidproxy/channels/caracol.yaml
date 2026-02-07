@@ -4,7 +4,6 @@ source:
   country: "CO"
   language: "es"
   headless: false
-  proxy: "socks5://127.0.0.1:1080"
 
 # Discovery phase: open the live page and extract all available channels
 
@@ -27,11 +26,11 @@ discovery:
       extract:
         channels:
           kind: css_array
-          path: "template[id^='signal-item-']"
+          path: "ul.ListLiveStreamModule-list li.ListLiveStreamModule-list-item[data-signal-item]"
           each:
-            id: "ps-mediastream::attr(data-video-id)"
-            name: "h1.LiveStreamModule-title::text"
-            image: "div.LiveStreamModule-header-logo img.Image::attr(src)"
+            id: "::attr(data-signal-item)"
+            name: "button.ListLiveStreamModule-list-item-button::attr(title)|button.ListLiveStreamModule-list-item-button::text"
+            image: "img.Image::attr(src)"
           unescape: true
 
 # Processing phase: rename and categorize channels
@@ -128,11 +127,13 @@ metadata:
 
 content:
   outputs:
-    manifest_url: "https://mdstrm.com/live-stream-playlist/${{channel.id}}.m3u8?access_token=${{get_token.access_token}}"
+    manifest_url: "${{get_manifest.manifest_url}}"
     headers:
-      Referer: "https://www.caracoltv.com/"
-      Origin: "https://www.caracoltv.com"
-      User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+      Referer: "https://mdstrm.com/"
+      Origin: "https://mdstrm.com"
+      Accept: "*/*"
+      Accept-Language: "en-US,en;q=0.9"
+      User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
 
   steps:
     - name: "go_live"
@@ -141,25 +142,40 @@ content:
       wait_for:
         selector: "template[id^='signal-item-']"
 
-    - name: "get_channel_token"
-      kind: Document
-      extract:
-        token_url:
-          kind: css
-          path: "ps-mediastream[data-video-id='${{channel.id}}']::attr(data-publicTokenEndpoint)"
-          default: "https://ms-live.noticiascaracol.com/vide-public-token/ctv"
+    - name: "select_channel"
+      kind: Script
+      script: |
+        (() => {
+          const signalItem = "${{channel.id}}";
+          const clickPlay = () => {
+            const livePlayButton =
+              document.querySelector("ps-mediastream[data-video-player] button.MediaStreamVideoPlayer-media-icon") ||
+              document.querySelector("button.MediaStreamVideoPlayer-media-icon");
+            livePlayButton?.click();
+            return !!livePlayButton;
+          };
 
-    - name: "get_token_video"
-      kind: Document
-      extract:
-        token_video_id:
-          kind: css
-          path: "ps-mediastream[data-publicTokenEndpoint='${{get_channel_token.token_url}}']::attr(data-video-id)"
+          // Schedule actions after this step returns so Sniff can start first.
+          setTimeout(() => {
+            if (signalItem) {
+              const channelButton = document.querySelector(
+                `li[data-signal-item="${signalItem}"] button.ListLiveStreamModule-list-item-button`
+              );
+              channelButton?.click();
+            }
+          }, 300);
 
-    - name: "get_token"
-      kind: FetchInBrowser
-      url: "${{get_channel_token.token_url}}?id=${{get_token_video.token_video_id}}"
+          setTimeout(clickPlay, 1500);
+          setTimeout(clickPlay, 2800);
+          setTimeout(clickPlay, 4200);
+          return true;
+        })()
+
+    - name: "get_manifest"
+      kind: Sniff
+      request:
+        url: "master\\.m3u8(\\?.*)?"
+        timeout: 120.0
       extract:
-        access_token:
-          kind: jsonpath
-          path: "$.access_token"
+        manifest_url:
+          kind: url

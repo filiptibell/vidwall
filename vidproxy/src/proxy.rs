@@ -10,10 +10,6 @@ use crate::segments::SegmentManager;
 
 /**
     Run the remux pipeline: read from source HLS/DASH, write to local HLS.
-
-    Note: Custom headers are no longer supported by the ffmpeg-source API.
-
-    The `headers` parameter is kept for API compatibility but is currently ignored.
 */
 pub async fn run_remux_pipeline(
     input_url: &str,

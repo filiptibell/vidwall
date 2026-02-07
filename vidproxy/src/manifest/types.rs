@@ -201,6 +201,9 @@ pub struct Step {
     /// URL for Navigate steps (supports interpolation)
     #[serde(default)]
     pub url: Option<String>,
+    /// JavaScript for Script steps (supports interpolation)
+    #[serde(default)]
+    pub script: Option<String>,
     /// Wait condition for Navigate steps
     #[serde(default)]
     pub wait_for: Option<WaitCondition>,
@@ -245,6 +248,8 @@ pub enum StepKind {
     FetchInBrowser,
     /// Extract from the current page's DOM (evaluates document HTML)
     Document,
+    /// Execute custom JavaScript in page context
+    Script,
 }
 
 /**

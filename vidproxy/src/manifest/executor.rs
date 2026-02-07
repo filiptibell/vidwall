@@ -541,6 +541,24 @@ async fn execute_document(
 }
 
 /**
+    Execute a Script step in page context.
+*/
+async fn execute_script(
+    step: &Step,
+    tab: &ChromeBrowserTab,
+    context: &InterpolationContext,
+) -> Result<SniffResult> {
+    let script_template = step
+        .script
+        .as_ref()
+        .ok_or_else(|| anyhow!("Script step '{}' requires 'script'", step.name))?;
+    let script = context.interpolate(script_template)?;
+    println!("[executor] Evaluating script step: {}", step.name);
+    let _ = tab.eval_json(script, true).await?;
+    Ok(SniffResult::Single(HashMap::new()))
+}
+
+/**
     Execute a BrowserFetch step - fetches via the page context to inherit cookies.
 */
 async fn execute_fetch_in_browser(
@@ -561,7 +579,8 @@ async fn execute_fetch_in_browser(
             const tryFetch = async (options) => {{
                 const res = await fetch({url:?}, options);
                 if (!res.ok) throw new Error('HTTP ' + res.status);
-                return await res.text();
+                const body = await res.text();
+                return {{ url: res.url, body }};
             }};
             try {{
                 return await tryFetch({{ credentials: 'include', mode: 'cors' }});
@@ -572,9 +591,20 @@ async fn execute_fetch_in_browser(
     );
 
     let value = tab.eval_json(script, true).await?;
-    let body = match value {
-        serde_json::Value::String(s) => s,
-        other => other.to_string(),
+    let (response_url, body) = match value {
+        serde_json::Value::Object(mut obj) => {
+            let response_url = obj
+                .remove("url")
+                .and_then(|v| v.as_str().map(ToString::to_string))
+                .unwrap_or_else(|| url.clone());
+            let body = obj
+                .remove("body")
+                .and_then(|v| v.as_str().map(ToString::to_string))
+                .unwrap_or_default();
+            (response_url, body)
+        }
+        serde_json::Value::String(s) => (url.clone(), s),
+        other => (url.clone(), other.to_string()),
     };
 
     println!("[executor] Browser fetched {} bytes", body.len());
@@ -615,7 +645,7 @@ async fn execute_fetch_in_browser(
     let mut extracted = HashMap::new();
     for (output_name, extractor) in &step.extract {
         let extractor = interpolate_extractor(extractor, context)?;
-        let value = extract(&extractor, &body, &url)?;
+        let value = extract(&extractor, &body, &response_url)?;
         println!("[executor] Extracted {}.{}", step.name, output_name);
         extracted.insert(output_name.clone(), value);
     }
@@ -716,6 +746,9 @@ pub async fn execute_steps(
                     array_result = Some((format!("{}.{}", step.name, name), items));
                 }
             },
+            StepKind::Script => {
+                let _ = execute_script(step, tab, &context).await?;
+            }
         }
     }
 
