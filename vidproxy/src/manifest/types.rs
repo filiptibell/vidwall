@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 /**
@@ -185,6 +184,9 @@ pub struct ContentOutputs {
     /// Static expiration duration in seconds (alternative to expires_at)
     #[serde(default)]
     pub expires_in: Option<u64>,
+    /// Optional headers to send when fetching the manifest/segments
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
 }
 
 /**
@@ -389,6 +391,7 @@ pub struct StreamInfo {
     pub manifest_url: String,
     pub license_url: Option<String>,
     pub expires_at: Option<u64>,
+    pub headers: Vec<(String, String)>,
 }
 
 /**

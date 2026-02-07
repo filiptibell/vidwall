@@ -17,7 +17,7 @@ use crate::segments::SegmentManager;
 */
 pub async fn run_remux_pipeline(
     input_url: &str,
-    #[allow(unused_variables)] headers: &[(String, String)],
+    headers: &[(String, String)],
     decryption_keys: &[String],
     output_dir: &Path,
     segment_duration: Duration,
@@ -46,6 +46,10 @@ pub async fn run_remux_pipeline(
             println!("Using {} CENC decryption key(s)", keys.len());
             source_config = source_config.with_decryption_keys(keys);
         }
+    }
+
+    if !headers.is_empty() {
+        source_config = source_config.with_headers(headers.to_vec());
     }
 
     // Open source (now async)

@@ -129,6 +129,10 @@ metadata:
 content:
   outputs:
     manifest_url: "https://mdstrm.com/live-stream-playlist/${{channel.id}}.m3u8?access_token=${{get_token.access_token}}"
+    headers:
+      Referer: "https://www.caracoltv.com/"
+      Origin: "https://www.caracoltv.com"
+      User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
   steps:
     - name: "go_live"

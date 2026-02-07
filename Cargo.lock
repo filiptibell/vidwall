@@ -2261,7 +2261,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-decode"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=1b6a1ed49c2e3eb4b0129b0630a421067bb9397a#1b6a1ed49c2e3eb4b0129b0630a421067bb9397a"
+source = "git+https://github.com/tibellium/crates?rev=a541dd416c23911b59b6a6477a637d03fc04ebda#a541dd416c23911b59b6a6477a637d03fc04ebda"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-source",
@@ -2282,7 +2282,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-sink"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=1b6a1ed49c2e3eb4b0129b0630a421067bb9397a#1b6a1ed49c2e3eb4b0129b0630a421067bb9397a"
+source = "git+https://github.com/tibellium/crates?rev=a541dd416c23911b59b6a6477a637d03fc04ebda#a541dd416c23911b59b6a6477a637d03fc04ebda"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-types",
@@ -2291,7 +2291,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-source"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=1b6a1ed49c2e3eb4b0129b0630a421067bb9397a#1b6a1ed49c2e3eb4b0129b0630a421067bb9397a"
+source = "git+https://github.com/tibellium/crates?rev=a541dd416c23911b59b6a6477a637d03fc04ebda#a541dd416c23911b59b6a6477a637d03fc04ebda"
 dependencies = [
  "aes",
  "bytecount",
@@ -2300,6 +2300,7 @@ dependencies = [
  "ffmpeg-types",
  "libc",
  "mp4-atom",
+ "mpeg2ts",
  "quick-xml 0.37.5",
  "reqwest 0.12.28",
  "serde",
@@ -2324,7 +2325,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-transform"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=1b6a1ed49c2e3eb4b0129b0630a421067bb9397a#1b6a1ed49c2e3eb4b0129b0630a421067bb9397a"
+source = "git+https://github.com/tibellium/crates?rev=a541dd416c23911b59b6a6477a637d03fc04ebda#a541dd416c23911b59b6a6477a637d03fc04ebda"
 dependencies = [
  "ffmpeg-next",
  "ffmpeg-types",
@@ -2333,7 +2334,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-types"
 version = "0.0.0"
-source = "git+https://github.com/tibellium/crates?rev=1b6a1ed49c2e3eb4b0129b0630a421067bb9397a#1b6a1ed49c2e3eb4b0129b0630a421067bb9397a"
+source = "git+https://github.com/tibellium/crates?rev=a541dd416c23911b59b6a6477a637d03fc04ebda#a541dd416c23911b59b6a6477a637d03fc04ebda"
 dependencies = [
  "static_assertions",
 ]
@@ -4145,6 +4146,12 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
 ]
+
+[[package]]
+name = "mpeg2ts"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7541fc1a42604cbd10e8607a4e6d4b231db982888fe8065ccb191b751d6368d6"
 
 [[package]]
 name = "multimap"

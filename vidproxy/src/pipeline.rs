@@ -164,6 +164,7 @@ impl ChannelPipeline {
 
         let mpd_url = stream_info.manifest_url.clone();
         let license_url = stream_info.license_url.clone();
+        let headers = stream_info.headers.clone();
         let output_dir = self.output_dir.clone();
         let segment_duration = self.segment_duration;
         let segment_manager = Arc::clone(&self.segment_manager);
@@ -228,7 +229,7 @@ impl ChannelPipeline {
                 let rt = tokio::runtime::Handle::current();
                 rt.block_on(proxy::run_remux_pipeline(
                     &mpd_url,
-                    &[],
+                    &headers,
                     &decryption_keys,
                     &output_dir,
                     segment_duration,

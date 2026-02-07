@@ -37,6 +37,7 @@ pub async fn execute_content(
         .transpose()?;
 
     let expires_at = resolve_expiration(&phase.outputs, &context)?;
+    let headers = resolve_headers(&phase.outputs, &context)?;
 
     println!(
         "[content] Got stream info for channel '{}'",
@@ -47,6 +48,7 @@ pub async fn execute_content(
         manifest_url,
         license_url,
         expires_at,
+        headers,
     })
 }
 
@@ -71,4 +73,24 @@ fn resolve_expiration(
     }
 
     Ok(None)
+}
+
+/**
+    Resolve optional headers from content outputs.
+*/
+fn resolve_headers(
+    outputs: &super::types::ContentOutputs,
+    context: &InterpolationContext,
+) -> Result<Vec<(String, String)>> {
+    let Some(headers) = &outputs.headers else {
+        return Ok(Vec::new());
+    };
+
+    let mut resolved = Vec::with_capacity(headers.len());
+    for (key, value) in headers {
+        let value = context.interpolate(value)?;
+        resolved.push((key.clone(), value));
+    }
+
+    Ok(resolved)
 }
