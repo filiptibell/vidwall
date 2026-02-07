@@ -20,8 +20,10 @@ cmac = "0.7"
 sha2 = "0.10"
 rand = "0.9"
 
+data-encoding = "2"
 hex = "0.4"
 hex-literal = "1.1"
+quick-xml = "0.37"
 thiserror = "2"
 
 include_dir = { version = "0.7", optional = true }
