@@ -6,4 +6,6 @@ publish = { workspace = true }
 
 [dependencies]
 drm-core = { path = "../core" }
+data-encoding = "2"
+quick-xml = "0.37"
 thiserror = "2"

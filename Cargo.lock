@@ -1869,7 +1869,9 @@ dependencies = [
 name = "drm-playready-format"
 version = "0.0.0"
 dependencies = [
+ "data-encoding",
  "drm-core",
+ "quick-xml 0.37.5",
  "thiserror 2.0.18",
 ]
 
