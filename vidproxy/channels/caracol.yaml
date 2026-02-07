@@ -90,19 +90,6 @@ metadata:
     expires_in: 3600 # Refresh EPG hourly
 
   steps:
-    - name: "go_live"
-      kind: Navigate
-      url: "https://www.caracoltv.com/senal-vivo"
-      wait_for:
-        selector: "template[id^='signal-item-']"
-
-    - name: "get_ctv"
-      kind: Document
-      extract:
-        video_id:
-          kind: css
-          path: "ps-mediastream[data-publicTokenEndpoint='https://ms-live.noticiascaracol.com/vide-public-token/ctv']::attr(data-video-id)"
-
     - name: "go_schedule"
       kind: Navigate
       url: "https://www.caracoltv.com/programacion"
@@ -116,7 +103,7 @@ metadata:
           kind: css_array
           path: "div.ScheduleDay-Content-item"
           each:
-            channel_id: "const:${{get_ctv.video_id}}"
+            channel_id: "const:signal-item-1"
             title: "h2.ScheduleDay-info-title a::text"
             start_time: "::attr(data-starttime)"
             end_time: "::attr(data-endtime)"

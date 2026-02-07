@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::{Duration, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use tokio::sync::{RwLock, watch};
 use tokio_util::io::ReaderStream;
 
@@ -871,12 +871,35 @@ fn escape_xml(s: &str) -> String {
     Convert ISO 8601 timestamp to XMLTV format (YYYYMMDDHHmmSS +0000).
 */
 fn format_xmltv_time(iso_time: &str) -> String {
+    let trimmed = iso_time.trim();
+
     // Try to parse ISO 8601 format (e.g., "2026-02-04T00:00:00.000Z")
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso_time) {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
         dt.format("%Y%m%d%H%M%S %z").to_string()
+    // Try Unix epoch timestamps (milliseconds or seconds)
+    } else if trimmed.as_bytes().iter().all(u8::is_ascii_digit) {
+        match trimmed.len() {
+            13.. => {
+                if let Ok(ms) = trimmed.parse::<i64>()
+                    && let Some(dt) = Utc.timestamp_millis_opt(ms).single()
+                {
+                    return dt.format("%Y%m%d%H%M%S %z").to_string();
+                }
+                trimmed.to_string()
+            }
+            10..=12 => {
+                if let Ok(secs) = trimmed.parse::<i64>()
+                    && let Some(dt) = Utc.timestamp_opt(secs, 0).single()
+                {
+                    return dt.format("%Y%m%d%H%M%S %z").to_string();
+                }
+                trimmed.to_string()
+            }
+            _ => trimmed.to_string(),
+        }
     } else {
         // Fallback: return as-is if parsing fails
-        iso_time.to_string()
+        trimmed.to_string()
     }
 }
 
